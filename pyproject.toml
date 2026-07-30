@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loghrc"
-version = "0.3.0"
+version = "0.4.0"
 description = "Labelled Occupancy Grid RL environments for Human-Robot Collaboration (Gymnasium)"
 requires-python = ">=3.10"
 dependencies = [
@@ -18,10 +18,10 @@ train = ["sb3-contrib>=2.3", "stable-baselines3>=2.3", "torch>=2.0"]
 dev = ["pytest>=7.0"]
 
 [tool.setuptools]
-packages = ["loghrc"]
+packages = ["loghrc", "loghrc.core", "loghrc.constraints", "loghrc.humans", "loghrc.humans.profiles", "loghrc.tasks", "loghrc.tasks.furniture", "loghrc.tasks.blocks", "loghrc.viz"]
 
 [tool.setuptools.package-data]
-loghrc = ["viewer/*.html"]
+loghrc = ["viz/viewer/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

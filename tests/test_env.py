@@ -8,7 +8,6 @@ import pytest
 from loghrc.tasks import full_table_config, two_leg_table_config
 from loghrc.configs import (
     HUMAN,
-    NUM_LABELS,
     ROBOT,
     RewardConfig,
     default_phase1_allocation,
@@ -67,7 +66,9 @@ def test_config_counts():
 def test_observation_spaces():
     env = LogHrcEnv(config=two_leg_table_config())
     obs, _ = env.reset(seed=0)
-    assert obs.shape == (NUM_LABELS, *env.config.grid_size)
+    # per-task layout: 4 classes -> 4 + 4 targets + gripper + human + assembled
+    assert env.layout.num_channels == 11
+    assert obs.shape == (env.layout.num_channels, *env.config.grid_size)
     assert obs.dtype == np.uint8 and obs.max() <= 1
     env2 = LogHrcEnv(config=two_leg_table_config(), observation_mode="label_grid")
     obs2, _ = env2.reset(seed=0)

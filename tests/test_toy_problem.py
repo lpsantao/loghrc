@@ -92,5 +92,5 @@ def test_toy_replay_and_channels(tmp_path):
     replay = Replay.load(info["episode_log"])
     assert replay.verify()
     obs, _ = env.reset(seed=2)
-    from loghrc.configs import NUM_LABELS
-    assert obs.shape == (NUM_LABELS, 10, 10, 10)
+    # 2 block classes -> 2 + 2 targets + gripper + human + assembled = 7
+    assert obs.shape == (7, 10, 10, 10)

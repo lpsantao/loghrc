@@ -43,8 +43,8 @@ def main() -> None:
 
     print("metrics:", info["episode_metrics"])
     print("episode log:", info["episode_log"])
-    print("\nReplay it: open loghrc/viewer/viewer.html and drop the file in,")
-    print(f"or: python -m loghrc.rendering {info['episode_log']} -o episode.gif")
+    print("\nReplay it: open loghrc/viz/viewer/viewer.html and drop the file in,")
+    print(f"or: python -m loghrc.viz.rendering {info['episode_log']} -o episode.gif")
 
 
 if __name__ == "__main__":
