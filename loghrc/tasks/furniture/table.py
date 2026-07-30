@@ -1,52 +1,18 @@
-"""Task library and registry.
-
-A task is a ``TaskConfig`` built by a zero-argument factory. Register your own
-with :func:`register_task` — the engine (env, mask, viewer, replay, validator)
-needs no changes for new tasks.
-
-    from loghrc.tasks import register_task
-
-    @register_task("my_task")
-    def my_task_config() -> TaskConfig:
-        ...
-"""
+"""HRC model set furniture tasks (P5 BOM corpus): two-leg table, table, chair."""
 
 from __future__ import annotations
 
-from typing import Callable
-
-from loghrc.configs import (
+from loghrc.core.config import (
     Group,
     JointSpec,
-    PartClass,
     PartSpec,
     RandomizationConfig,
     TaskConfig,
     Vox,
 )
-
-_REGISTRY: dict[str, Callable[[], TaskConfig]] = {}
-
-
-def register_task(name: str):
-    """Decorator: register a TaskConfig factory under ``name``."""
-
-    def deco(fn: Callable[[], TaskConfig]):
-        _REGISTRY[name] = fn
-        return fn
-    return deco
-
-
-def get_task(name: str) -> TaskConfig:
-    try:
-        return _REGISTRY[name]()
-    except KeyError:
-        raise KeyError(f"unknown task {name!r}; available: {sorted(_REGISTRY)}") from None
-
-
-def list_tasks() -> list[str]:
-    return sorted(_REGISTRY)
-
+from loghrc.core.labels import PartClass
+from loghrc.core.reward import RewardConfig
+from loghrc.tasks.registry import register_task
 
 # ---------------------------------------------------------------------------
 # HRC model set table (P5 BOM corpus): board + 4x (dowel, top, foot)
@@ -136,6 +102,7 @@ def full_table_config() -> TaskConfig:
         home_robot=Vox(2, 2, 10),
         home_human=Vox(29, 21, 10),
         max_ticks=700,
+        reward=RewardConfig.hrc_composite(),
         randomization=RandomizationConfig(
             randomize_starts=False, randomize_goal=False,
             staging_region=(0, 0, 13, 24),  # left of the assembly zone
@@ -158,6 +125,7 @@ def two_leg_table_config() -> TaskConfig:
         home_robot=Vox(2, 2, 10),
         home_human=Vox(29, 21, 10),
         max_ticks=400,
+        reward=RewardConfig.hrc_composite(),
         randomization=RandomizationConfig(
             randomize_starts=False, randomize_goal=False,
             staging_region=(0, 0, 13, 24),
@@ -169,47 +137,5 @@ def chair_config() -> TaskConfig:
     """HRC chair (19 mid-level parts). Implementation step 8 (DESIGN.md §9)."""
 
     raise NotImplementedError("Chair config is implementation step 8 — after table experiments run.")
-
-
-# ---------------------------------------------------------------------------
-# CASE 2026 toy problem: two-block stacking, ported into this engine
-# ---------------------------------------------------------------------------
-#
-# Original: 10x10x10 grid @ 10 cm, yellow stacked on green at a goal position.
-# Linear task graph PICK/PLACE GREEN -> PICK/PLACE YELLOW arises here from the
-# support constraint (yellow's target rests on green) + pick_is_useful masking.
-# Phase 1: robot handles green, human handles yellow. Phase 2: flexible.
-
-@register_task("two_block")
-def two_block_config() -> TaskConfig:
-    green = PartSpec(
-        id=1, name="green_block", cls=PartClass.GREEN_BLOCK, size=(2, 2, 2),
-        start=Vox(1, 1, 0), target=Vox(4, 4, 0),
-    )
-    yellow = PartSpec(
-        id=2, name="yellow_block", cls=PartClass.YELLOW_BLOCK, size=(2, 2, 2),
-        start=Vox(7, 1, 0), target=Vox(4, 4, 2),
-        support=(green.id,),  # stacks on green -> linear precedence via mask
-    )
-    return TaskConfig(
-        name="two_block",
-        grid_size=(10, 10, 10),
-        voxel_size_cm=10.0,
-        parts=(green, yellow),
-        joints=(),
-        groups=(
-            Group(name="green", part_ids=(green.id,), joint_ids=()),
-            Group(name="yellow", part_ids=(yellow.id,), joint_ids=()),
-        ),
-        home_robot=Vox(1, 8, 6),
-        home_human=Vox(8, 8, 6),
-        max_ticks=120,
-        phase1_allocation={"green": 0, "yellow": 1},  # robot green, human yellow
-        default_profile_pool="toy_phase1",
-        randomization=RandomizationConfig(
-            randomize_starts=False, randomize_goal=False,
-            staging_region=(0, 0, 10, 4),  # front strip of the toy table
-        ),
-    )
 
 

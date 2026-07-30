@@ -26,7 +26,7 @@ learning.
 - **Layout randomization**: per-episode randomized part starts and/or goal
   position (independent switches, seeded, every sampled layout re-validated).
 - **Every episode replayable**: compact event logs, deterministic replay,
-  offline interactive 3D viewer (`loghrc/viewer/viewer.html`), gif/mp4 export.
+  offline interactive 3D viewer (`loghrc/viz/viewer/viewer.html`), gif/mp4 export.
 
 ## Install
 
@@ -73,11 +73,11 @@ python -m loghrc.validate            # all registered tasks
 python -m loghrc.validate my_task
 ```
 
-Replay an episode: open `loghrc/viewer/viewer.html` in a browser and drop in
+Replay an episode: open `loghrc/viz/viewer/viewer.html` in a browser and drop in
 any `runs/**/episodes/ep_*.jsonl.gz`, or export a video:
 
 ```bash
-python -m loghrc.rendering runs/my_run/episodes/ep_000000.jsonl.gz -o ep.gif
+python -m loghrc.viz.rendering runs/my_run/episodes/ep_000000.jsonl.gz -o ep.gif
 ```
 
 ## Defining your own task

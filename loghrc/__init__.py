@@ -1,90 +1,67 @@
 """loghrc — Labelled Occupancy Grid environments for Human-Robot Collaboration.
 
-A Gymnasium-based simulator for task-level HRC assembly: durative tick engine,
-labelled voxel-grid observations, task-graph action masking, scripted (and
-pluggable) human partner models, per-episode layout randomization with a
-config validator, full episode logging with deterministic replay, and an
-offline interactive 3D viewer.
+Layered architecture (DESIGN v2):
 
-Tasks are plain dataclass configs registered with ``loghrc.tasks.register_task``;
-human models implement the ``ScriptedPolicy`` interface; task-graph semantics
-are pluggable via ``TaskConfig.graph_factory``.
+- ``loghrc.core``        task-agnostic engine: physics, tick engine, per-task
+                         multi-label voxel observations, goals, sparse-default
+                         reward, randomization, validation, logging/replay.
+- ``loghrc.constraints`` pluggable layer: task graphs, action masking,
+                         allocation. The core runs without it (free simulator).
+- ``loghrc.humans``      human model contract + scripted profiles/pools.
+- ``loghrc.tasks``       task library by domain (furniture, blocks) + registry.
+                         Importing it registers the Gymnasium ids
+                         (``LogHrc-<task>-v0``).
+- ``loghrc.viz``         offline 3D viewer + matplotlib export.
+
+Top-level attributes resolve lazily (PEP 562) so that ``loghrc.core`` stays
+import-independent of the plugin layers — enforced by a test.
 """
 
-from gymnasium.envs.registration import register
-
 from loghrc.__about__ import __version__
-from loghrc.configs import (
-    HUMAN,
-    NUM_LABELS,
-    ROBOT,
-    FurnitureConfig,  # backwards-compatible alias
-    RandomizationConfig,
-    RewardConfig,
-    TaskConfig,
-)
-from loghrc.env import LogHrcEnv
-from loghrc.episode_log import EpisodeRecorder, RunLogger
-from loghrc.human import (
-    HELD_OUT_PRESETS,
-    POOLS,
-    PRESETS,
-    TOY_PHASE1_PRESETS,
-    TOY_PHASE2_PRESETS,
-    HumanProfile,
-    ScriptedPolicy,
-)
-from loghrc.replay import Replay
-from loghrc.task_graph import DefaultTaskGraph
-from loghrc.tasks import (
-    full_table_config,
-    get_task,
-    list_tasks,
-    register_task,
-    two_block_config,
-    two_leg_table_config,
-)
-from loghrc.validate import TaskValidationError, validate_task
 
-# Backwards-compatible alias (pre-split name)
-FurnitureAssemblyEnv = LogHrcEnv
+_EXPORTS = {
+    # core
+    "LogHrcEnv": "loghrc.core.env",
+    "FurnitureAssemblyEnv": "loghrc.core.env:LogHrcEnv",
+    "TaskConfig": "loghrc.core.config",
+    "FurnitureConfig": "loghrc.core.config:TaskConfig",
+    "RandomizationConfig": "loghrc.core.config",
+    "ROBOT": "loghrc.core.config",
+    "HUMAN": "loghrc.core.config",
+    "PartClass": "loghrc.core.labels",
+    "RewardConfig": "loghrc.core.reward",
+    "AllTargets": "loghrc.core.goal",
+    "JointsAndAnchor": "loghrc.core.goal",
+    "AnyOf": "loghrc.core.goal",
+    "EpisodeRecorder": "loghrc.core.episode_log",
+    "RunLogger": "loghrc.core.episode_log",
+    "Replay": "loghrc.core.replay",
+    "validate_task": "loghrc.core.validate",
+    "TaskValidationError": "loghrc.core.validate",
+    # plugins
+    "DefaultTaskGraph": "loghrc.constraints.graph",
+    "HumanModel": "loghrc.humans.interface",
+    "HumanProfile": "loghrc.humans.scripted",
+    "ScriptedPolicy": "loghrc.humans.scripted",
+    # tasks (importing these registers the gym ids)
+    "register_task": "loghrc.tasks",
+    "get_task": "loghrc.tasks",
+    "list_tasks": "loghrc.tasks",
+    "two_leg_table_config": "loghrc.tasks",
+    "full_table_config": "loghrc.tasks",
+    "two_block_config": "loghrc.tasks",
+}
 
-__all__ = [
-    "__version__",
-    "LogHrcEnv",
-    "FurnitureAssemblyEnv",
-    "TaskConfig",
-    "FurnitureConfig",
-    "RewardConfig",
-    "RandomizationConfig",
-    "HumanProfile",
-    "ScriptedPolicy",
-    "DefaultTaskGraph",
-    "EpisodeRecorder",
-    "RunLogger",
-    "Replay",
-    "validate_task",
-    "TaskValidationError",
-    "register_task",
-    "get_task",
-    "list_tasks",
-    "two_leg_table_config",
-    "full_table_config",
-    "two_block_config",
-    "PRESETS",
-    "HELD_OUT_PRESETS",
-    "TOY_PHASE1_PRESETS",
-    "TOY_PHASE2_PRESETS",
-    "POOLS",
-    "ROBOT",
-    "HUMAN",
-    "NUM_LABELS",
-]
+__all__ = ["__version__", *_EXPORTS]
 
-# One Gymnasium id per registered task: LogHrc-<task>-v0
-for _name in list_tasks():
-    register(
-        id=f"LogHrc-{_name}-v0",
-        entry_point="loghrc.env:LogHrcEnv",
-        kwargs={"config": get_task(_name)},
-    )
+
+def __getattr__(name: str):
+    try:
+        target = _EXPORTS[name]
+    except KeyError:
+        raise AttributeError(f"module 'loghrc' has no attribute {name!r}") from None
+    module_path, _, attr = target.partition(":")
+    import importlib
+
+    module = importlib.import_module(module_path)
+    return getattr(module, attr or name)
