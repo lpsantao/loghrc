@@ -8,14 +8,16 @@ learning.
   durations; idle time, blocked attempts, conflicts and proximity violations are
   first-class, measurable events (Hoffman-style fluency metrics).
 - **Labelled voxel-grid observations** (LOG): one binary channel per semantic
-  label (part classes, targets, robot gripper, human) — identical layout
-  across all tasks.
+  label (part classes, targets, robot gripper, human). Every task uses the same
+  channel convention, while its channel count and grid dimensions are derived
+  from that task.
 - **Task-graph action masking**: the env is physically permissive; procedural
   validity (precedence, allocation) surfaces through `action_masks()` for
   MaskablePPO-style training. `constraint_mode="mask" | "penalty" | "none"`
   switches between masking invalid actions, exposing and penalizing invalid
   no-ops, and exposing invalid no-ops without a penalty. Task validity is the
-  same in all three arms; `graph=None` is the separate physics-only free sim.
+  same in all three arms; `graph=None` removes graph semantics, and
+  `phase=2, graph=None` gives physics-only validity.
 - **Pluggable everything**:
   - *Tasks* are dataclass configs registered via `loghrc.tasks.register_task`
     — no engine changes to add a task.
@@ -24,8 +26,9 @@ learning.
   - *Task-graph semantics* are a class (`DefaultTaskGraph`, AND-precedence);
     subclass and pass via `TaskConfig.graph_factory` for e.g. OR-branching.
 - **Bulletproof configs**: a three-layer validator (geometry, graph,
-  scripted-solver dry run — a passing task is *provably completable*), run at
-  env construction and via `python -m loghrc.validate`.
+  scripted-solver dry run), run at env construction and via
+  `python -m loghrc.validate`. Passing means solver-verified for the tested
+  phases, seeds, profiles, and sampled layouts; it is not a mathematical proof.
 - **Layout randomization**: per-episode randomized part starts and/or goal
   position (independent switches, seeded, every sampled layout re-validated).
 - **Every episode replayable**: compact event logs, deterministic replay,
@@ -120,14 +123,21 @@ env = LogHrcEnv(config=full_table_config(), constraint_mode="none")
 
 In `penalty` and `none`, `action_masks()` intentionally returns all `True`.
 Invalid physical, graph, or allocation actions remain one-tick no-ops; only
-`penalty` subtracts `RewardConfig.w_invalid`. Pass `graph=None` when a custom
-task intentionally has no procedural graph semantics.
+`penalty` subtracts the resolved `invalid_action_penalty` (by default,
+`RewardConfig.w_invalid`). Pass `graph=None` when a custom task intentionally
+has no procedural graph semantics. Phase-1 allocation still applies when the
+graph is absent; use `phase=2, graph=None` for a mask and execution semantics
+containing only physical validity.
 
 Reward ownership is similarly layered:
 
 1. `reward_config=` passed to the environment is an explicit experiment override.
 2. Otherwise `TaskConfig.reward` is the task's canonical specialized reward.
 3. Otherwise the engine uses task-agnostic sparse completion reward.
+
+`RewardConfig` covers the built-in terms. A task with different semantics can
+provide any `RewardModel` implementing `compute(env, context)`; the standard
+constraint-mode invalid-action penalty remains an environment-level overlay.
 
 See [EXPERIMENT_TRACKING.md](EXPERIMENT_TRACKING.md) for the complete run
 manifest, episode-log schema, metric definitions, and reproduction checklist.
@@ -168,8 +178,11 @@ python -m loghrc.viz.rendering runs/my_run/episodes/ep_000000.jsonl.gz -o ep.gif
 ## Defining your own task
 
 ```python
-from loghrc.configs import Group, JointSpec, PartClass, PartSpec, TaskConfig, Vox
+from loghrc import register_part_class
+from loghrc.configs import Group, JointSpec, PartSpec, TaskConfig, Vox
 from loghrc.tasks import register_task
+
+CUSTOM_PANEL = register_part_class("CUSTOM_PANEL", color="#7651a8")
 
 @register_task("my_task")
 def my_task_config() -> TaskConfig:
@@ -182,8 +195,15 @@ def my_task_config() -> TaskConfig:
     )
 ```
 
-`python -m loghrc.validate my_task` tells you if the layout or graph is broken
-— before you spend GPU hours on it.
+Importing this module immediately registers `LogHrc-my_task-v0`. Validate an
+external module before spending GPU hours:
+
+```bash
+python -m loghrc.validate --module my_package.tasks my_task
+```
+
+See [TASK_AUTHORING.md](TASK_AUTHORING.md) for the full schema, custom semantic
+labels, goals, rewards, graph semantics, registration, and validation workflow.
 
 ## Built-in tasks
 

@@ -20,7 +20,7 @@ import gymnasium as gym
 
 INDEX_FIELDS = [
     "episode", "file", "config", "task_hash", "experiment_hash", "phase",
-    "constraint_mode", "profile", "reward_hash", "seed",
+    "constraint_mode", "invalid_action_penalty", "profile", "reward_hash", "seed",
     "success", "ticks", "reward",
     "conflicts", "safety_violations", "proximity_violations", "invalid_robot_actions",
     "human_idle_blocked", "human_idle_choice", "human_blocked_attempts", "human_interruptions",
@@ -106,6 +106,7 @@ class RunLogger:
             "experiment_hash": record["header"]["experiment_hash"],
             "phase": record["header"]["phase"],
             "constraint_mode": record["header"]["constraint_mode"],
+            "invalid_action_penalty": record["header"]["invalid_action_penalty"],
             "profile": record["header"]["profile"]["name"],
             "reward_hash": record["header"]["reward_hash"],
             "seed": record["header"]["seed"],

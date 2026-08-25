@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from loghrc.core.config import HUMAN, ROBOT, TaskConfig, Vox
-from loghrc.core.labels import PartClass
+from loghrc.core.labels import PartClass, PartLabel, part_class_name
 
 if TYPE_CHECKING:  # pragma: no cover
     from loghrc.core.env import LogHrcEnv
@@ -29,7 +29,8 @@ HUMAN_BLOB = (2, 2, 1)
 
 class ChannelLayout:
     def __init__(self, config: TaskConfig) -> None:
-        self.classes: list[PartClass] = sorted({p.cls for p in config.parts})
+        self.classes: list[PartClass | PartLabel] = sorted(
+            {p.cls for p in config.parts}, key=part_class_name)
         self.class_channel = {cls: i for i, cls in enumerate(self.classes)}
         n = len(self.classes)
         self.target_channel = {cls: n + i for i, cls in enumerate(self.classes)}
@@ -37,8 +38,8 @@ class ChannelLayout:
         self.human = 2 * n + 1
         self.assembled = 2 * n + 2
         self.num_channels = 2 * n + 3
-        self.names = ([c.name for c in self.classes]
-                      + [f"TARGET_{c.name}" for c in self.classes]
+        self.names = ([part_class_name(c) for c in self.classes]
+                      + [f"TARGET_{part_class_name(c)}" for c in self.classes]
                       + ["ROBOT_GRIPPER", "HUMAN", "ASSEMBLED"])
 
 

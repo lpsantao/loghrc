@@ -3,6 +3,7 @@ observation semantics, goal specs, reward ownership, frontier flag."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 import subprocess
 import sys
 
@@ -16,6 +17,7 @@ from loghrc import (
     JointsAndAnchor,
     LogHrcEnv,
     RewardConfig,
+    RewardContext,
     TaskConfig,
 )
 from loghrc.configs import ROBOT, HUMAN
@@ -162,3 +164,30 @@ def test_reward_precedence_env_override_beats_task():
 def test_task_owned_rewards():
     assert two_block_config().reward.completion == 30.0        # CASE constants
     assert full_table_config().reward.shaping is True          # thesis composite
+
+
+@dataclass(frozen=True)
+class ConstantReward:
+    value: float
+
+    def compute(self, env, context: RewardContext) -> float:
+        return self.value
+
+
+def test_custom_task_reward_and_constraint_penalty_are_composable():
+    reward_model = ConstantReward(3.0)
+    config = replace(two_block_config(), reward=reward_model)
+    env = LogHrcEnv(
+        config=config,
+        phase=1,
+        human_profile="expert",
+        constraint_mode="penalty",
+        invalid_action_penalty=2.5,
+    )
+    env.reset(seed=0)
+    invalid = env.action_table.index(("pick", 2))  # allocated to the human
+    _, reward, _, _, _ = env.step(invalid)
+    assert reward == 0.5
+    manifest = env.experiment_manifest()
+    assert manifest["reward"]["state"]["value"] == 3.0
+    assert manifest["invalid_action_penalty"] == 2.5

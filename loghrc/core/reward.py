@@ -11,6 +11,34 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
+
+from loghrc.core.provenance import component_spec, fingerprint
+
+if TYPE_CHECKING:  # pragma: no cover
+    from loghrc.core.env import LogHrcEnv
+
+
+@dataclass(frozen=True)
+class RewardContext:
+    """Read-only facts for one robot decision transition."""
+
+    events: tuple[Mapping[str, Any], ...]
+    elapsed_ticks: int
+    robot_action_valid: bool
+    terminated: bool
+
+
+@runtime_checkable
+class RewardModel(Protocol):
+    """Task-owned reward contract.
+
+    Implementations may inspect the resolved environment state and the events
+    produced since the previous robot decision. Public dataclass fields (or an
+    optional ``fingerprint_payload`` method) become experiment provenance.
+    """
+
+    def compute(self, env: "LogHrcEnv", context: RewardContext) -> float: ...
 
 
 @dataclass(frozen=True)
@@ -49,6 +77,32 @@ class RewardConfig:
         payload = json.dumps(self.__dict__, sort_keys=True)
         return hashlib.sha1(payload.encode()).hexdigest()[:10]
 
+    def compute(self, env: "LogHrcEnv", context: RewardContext) -> float:
+        """Compute the built-in configurable task/fluency reward."""
+
+        reward = 0.0
+        joints = sum(1 for event in context.events if event["type"] == "joint")
+        places = sum(1 for event in context.events if event["type"] == "placed")
+        safety = sum(1 for event in context.events if event["type"] == "safety")
+        blocked = sum(1 for event in context.events if event["type"] == "human_blocked")
+        conflicts = sum(1 for event in context.events if event["type"] == "conflict")
+        if self.shaping:
+            reward += self.w_joint * joints + self.w_place * places
+        if self.fluency:
+            reward -= self.w_human_blocked_idle * blocked
+            reward -= self.w_conflict * conflicts
+            reward -= self.w_safety * safety
+        if self.step_penalty:
+            reward -= self.w_tick * context.elapsed_ticks
+        if context.terminated:
+            reward += self.completion
+            if self.time_bonus:
+                reward += self.w_time_bonus * max(0, env.config.max_ticks - env.t)
+            if (self.division_bonus and env.phase == 2
+                    and env.counters.robot_tasks > 0 and env.counters.human_tasks > 0):
+                reward += self.w_division
+        return float(reward)
+
     @staticmethod
     def sparse() -> "RewardConfig":
         """Engine default: goal completion only."""
@@ -73,3 +127,19 @@ class RewardConfig:
             time_bonus=True, w_time_bonus=1.0,
             division_bonus=True, w_division=20.0,
         )
+
+
+def reward_spec(model: RewardModel) -> Any:
+    """Canonical serializable reward description for logs and manifests."""
+
+    if hasattr(model, "to_dict"):
+        return model.to_dict()
+    return component_spec(model)
+
+
+def resolved_reward_hash(model: RewardModel) -> str:
+    """Stable short fingerprint for built-in or custom reward models."""
+
+    if hasattr(model, "reward_hash"):
+        return model.reward_hash()
+    return fingerprint(model, length=10)

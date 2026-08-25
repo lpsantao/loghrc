@@ -102,6 +102,16 @@ const ROBOT = 0, HUMAN = 1;
 let ep = null;        // {header, events, footer}
 let frames = [];      // per-tick snapshots
 let tick = 0, playing = false, lastAdvance = 0;
+let classColors = { ...CLASS_COLORS };
+
+function resolveClassColors(header) {
+  const colors = { ...CLASS_COLORS };
+  for (const item of header.part_classes || []) {
+    if (/^#[0-9a-fA-F]{6}$/.test(item.color || ""))
+      colors[item.name] = parseInt(item.color.slice(1), 16);
+  }
+  return colors;
+}
 
 function parseEpisode(buf, name) {
   let text;
@@ -257,7 +267,7 @@ function buildWorld() {
   for (const p of ep.header.parts) {
     const [sx, sy, sz] = p.size;
     const geo = new THREE.BoxGeometry(sx, sz, sy);
-    const color = CLASS_COLORS[p.cls] || 0xaaaaaa;
+    const color = classColors[p.cls] || 0xaaaaaa;
     const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
     scene.add(mesh);
     meshes[p.id] = mesh;
@@ -365,6 +375,7 @@ function kv(id, obj) {
 
 function loadEpisode(buf, name) {
   ep = parseEpisode(buf, name);
+  classColors = resolveClassColors(ep.header);
   frames = buildFrames(ep);
   buildWorld();
   document.getElementById("drop").style.display = "none";
@@ -378,7 +389,8 @@ function loadEpisode(buf, name) {
                   interruptions:m.human_interruptions, "failed actions":m.failed_actions });
   kv("profile", Object.fromEntries(Object.entries(h.profile).map(
       ([k, v]) => [k, typeof v === "number" ? v.toFixed?.(2) ?? v : v])));
-  const leg = Object.entries(CLASS_COLORS).map(([name, c]) =>
+  const usedClasses = [...new Set(h.parts.map(p => p.cls))];
+  const leg = usedClasses.map(name => [name, classColors[name] || 0xaaaaaa]).map(([name, c]) =>
     `<div class="legend-item"><span class="sw" style="background:#${c.toString(16).padStart(6,"0")}"></span>${name}</div>`).join("");
   document.getElementById("legend").innerHTML = leg +
     `<div class="legend-item"><span class="sw" style="background:#d62728"></span>robot gripper</div>

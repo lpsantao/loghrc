@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 import subprocess
 import sys
+import textwrap
 
 import gymnasium as gym
 import numpy as np
@@ -16,8 +18,10 @@ from loghrc.configs import (
     PartClass,
     PartSpec,
     RandomizationConfig,
+    ROBOT,
     TaskConfig,
     Vox,
+    register_part_class,
 )
 from loghrc.env import LogHrcEnv
 from loghrc.episode_log import EpisodeRecorder
@@ -46,6 +50,38 @@ def test_public_validator_module_runs_cli():
     )
     assert result.returncode == 0, result.stderr
     assert "[ok]   two_block" in result.stdout
+
+
+def test_external_task_module_registers_gym_id_and_validates(tmp_path):
+    module = tmp_path / "external_tasks.py"
+    module.write_text(textwrap.dedent("""
+        from dataclasses import replace
+        from loghrc.tasks import register_task, two_block_config
+
+        @register_task("external_demo")
+        def external_demo_config():
+            return replace(two_block_config(), name="external_demo")
+    """))
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        item for item in (str(tmp_path), env.get("PYTHONPATH", "")) if item)
+
+    gym_result = subprocess.run(
+        [sys.executable, "-c", (
+            "import gymnasium as gym; import external_tasks; "
+            "env = gym.make('LogHrc-external_demo-v0'); env.reset(seed=0); env.close()"
+        )],
+        capture_output=True, text=True, env=env,
+    )
+    assert gym_result.returncode == 0, gym_result.stderr
+
+    validate_result = subprocess.run(
+        [sys.executable, "-m", "loghrc.validate", "--module", "external_tasks",
+         "external_demo"],
+        capture_output=True, text=True, env=env,
+    )
+    assert validate_result.returncode == 0, validate_result.stderr
+    assert "[ok]   external_demo" in validate_result.stdout
 
 
 def _minimal_config(**overrides) -> TaskConfig:
@@ -114,6 +150,57 @@ def test_env_init_rejects_invalid_config():
     cfg = _minimal_config(parts=(a, b))
     with pytest.raises(ValueError):
         LogHrcEnv(config=cfg)
+
+
+def test_validator_rejects_partial_allocation_and_invalid_phase():
+    cfg = replace(_minimal_config(), phase1_allocation={"a": ROBOT})
+    assert any("missing groups" in issue for issue in check_graph(cfg))
+    with pytest.raises(ValueError, match="missing groups"):
+        LogHrcEnv(config=cfg, phase=1)
+    with pytest.raises(ValueError, match="phase must be 1 or 2"):
+        LogHrcEnv(config=_minimal_config(), phase=99)
+
+
+def test_validator_rejects_structural_and_plugin_contract_errors():
+    cfg = _minimal_config()
+    duplicate = replace(cfg.parts[1], id=cfg.parts[0].id)
+    variants = [
+        replace(cfg, max_ticks=0),
+        replace(cfg, robot_durations={"wait": 1}),
+        replace(cfg, parts=(cfg.parts[0], duplicate)),
+        replace(cfg, default_profile_pool="missing_pool"),
+        replace(cfg, goal=object()),
+        replace(cfg, reward=object()),
+    ]
+    for variant in variants:
+        issues = check_geometry(variant) + check_graph(variant)
+        assert issues
+        with pytest.raises(ValueError):
+            LogHrcEnv(config=variant)
+
+
+def test_registered_custom_part_class_survives_observation_log_and_replay(tmp_path):
+    custom = register_part_class("CUSTOM_PANEL", "#123abc")
+    cfg = _minimal_config()
+    custom_part = replace(cfg.parts[0], cls=custom)
+    cfg = replace(cfg, parts=(custom_part, cfg.parts[1]))
+    env = EpisodeRecorder(
+        LogHrcEnv(config=cfg, human_profile="fast_eager"),
+        tmp_path / "custom_label",
+    )
+    obs, _ = env.reset(seed=4)
+    assert "CUSTOM_PANEL" in env.unwrapped.layout.names
+    assert obs.shape[0] == 7
+    success, info = run_scripted(env, seed=4)
+    assert success
+    replay = Replay.load(info["episode_log"])
+    assert replay.verify()
+    assert {item["name"] for item in replay.header["part_classes"]} == {
+        "CUSTOM_PANEL", "YELLOW_BLOCK",
+    }
+    assert replay.class_colors["CUSTOM_PANEL"] == "#123abc"
+    assert replay.class_labels["YELLOW_BLOCK"] == int(PartClass.YELLOW_BLOCK)
+    assert replay.class_labels["CUSTOM_PANEL"] > max(PartClass)
 
 
 # -------------------------------------------------------------- randomization

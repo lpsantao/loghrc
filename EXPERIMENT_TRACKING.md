@@ -36,6 +36,7 @@ environment, rather than only the task defaults:
 
 - task hash and phase;
 - `constraint_mode`;
+- resolved invalid-action penalty magnitude;
 - resolved graph type and parameters;
 - resolved goal and reward, including `reward_hash`;
 - resolved allocation;
@@ -58,7 +59,7 @@ filenames, so they never share counters or overwrite one another.
 
 Built-in dataclasses, mappings, sequences, enums, callables, and ordinary
 objects are serialized canonically. A custom goal, graph, reward, or human
-model should implement:
+model whose behavior is not fully represented by public fields should implement:
 
 ```python
 def fingerprint_payload(self) -> dict:
@@ -70,6 +71,10 @@ def fingerprint_payload(self) -> dict:
 
 Include every public parameter that can change behavior. Do not include random
 episode state, caches, open files, or memory addresses.
+
+A custom reward must additionally implement `compute(env, context)`. The
+context contains transition events, elapsed ticks, robot-action validity, and
+termination. See [TASK_AUTHORING.md](TASK_AUTHORING.md).
 
 ## 3. Source and runtime provenance
 
@@ -120,6 +125,10 @@ regardless of task domain. A custom task can opt into its own reward without
 changing engine code. `reward_hash` identifies the resolved reward that
 actually generated an episode.
 
+`constraint_mode="penalty"` is applied as an environment-level overlay after
+the task reward, so custom rewards remain compatible with the same controlled
+mask/penalty/none comparison. `invalid_action_penalty=` sets its magnitude.
+
 ## 6. Randomization resolution
 
 The two switches are independent:
@@ -145,12 +154,13 @@ Task validity stays fixed across the controlled arms:
 | Mode | Policy-facing mask | Invalid action | Invalid penalty |
 |---|---|---|---:|
 | `mask` | physics ∧ graph ∧ allocation | one-tick no-op | no |
-| `penalty` | all actions exposed | one-tick no-op | `w_invalid` |
+| `penalty` | all actions exposed | one-tick no-op | `invalid_action_penalty` |
 | `none` | all actions exposed | one-tick no-op | no |
 
-`graph=None` is different: it deliberately removes graph semantics and provides
-the physics-only/free simulator. Do not mix `graph=None` episodes into a
-masking ablation unless changing the MDP is the intended experiment.
+`graph=None` is different: it deliberately removes graph semantics. Phase-1
+allocation remains active; use `phase=2, graph=None` for physics-only validity.
+Do not mix `graph=None` episodes into a masking ablation unless changing the MDP
+is the intended experiment.
 
 ## 8. Episode JSONL schema
 
@@ -166,6 +176,7 @@ The header stores:
 - goal description, reward configuration/hash, graph, and constraint mode;
 - grid, phase, allocation, reset seed, and environment-local episode id;
 - complete sampled human profile;
+- resolved semantic part-class names and visualization colors;
 - resolved per-episode part starts and targets;
 - joint definitions; and
 - robot and human home positions.
@@ -199,7 +210,8 @@ The index is a filterable one-row-per-episode projection containing:
 
 - episode/file identity;
 - task and experiment hashes;
-- task name, phase, constraint mode, profile, reward hash, and seed;
+- task name, phase, constraint mode, invalid-action penalty, profile, reward
+  hash, and seed;
 - success, ticks, and total episode reward; and
 - all raw counters listed below.
 

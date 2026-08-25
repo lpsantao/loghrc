@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import Any
 
 import gymnasium as gym
@@ -28,10 +29,17 @@ from loghrc.core.config import (
 )
 from loghrc.core.geometry import boxes_overlap, pos_along_path
 from loghrc.core.goal import default_goal
+from loghrc.core.labels import part_class_manifest, part_class_name
 from loghrc.core.observation import ChannelLayout, build_observation
 from loghrc.core.provenance import component_spec, fingerprint, runtime_manifest, source_manifest
 from loghrc.core.randomization import sample_layout
-from loghrc.core.reward import RewardConfig
+from loghrc.core.reward import (
+    RewardConfig,
+    RewardContext,
+    RewardModel,
+    resolved_reward_hash,
+    reward_spec,
+)
 
 
 @dataclass
@@ -83,7 +91,8 @@ class LogHrcEnv(gym.Env):
     def __init__(
         self,
         config: TaskConfig | None = None,
-        reward_config: RewardConfig | None = None,   # override > task.reward > sparse
+        reward_config: RewardModel | None = None,   # override > task.reward > sparse
+        invalid_action_penalty: float | None = None,
         phase: int = 1,
         human_profile: "str | object" = "sample",
         held_out_profiles: bool = False,
@@ -100,11 +109,26 @@ class LogHrcEnv(gym.Env):
             from loghrc.tasks import two_leg_table_config
             config = two_leg_table_config()
         self.config = config
+        if phase not in (1, 2):
+            raise ValueError("phase must be 1 or 2")
         if constraint_mode not in ("mask", "penalty", "none"):
             raise ValueError("constraint_mode must be 'mask', 'penalty', or 'none'")
         self.constraint_mode = constraint_mode
         # reward precedence: env override > task-owned > engine sparse default
-        self.reward_config = reward_config or self.config.reward or RewardConfig.sparse()
+        self.reward_config = (
+            reward_config if reward_config is not None
+            else self.config.reward if self.config.reward is not None
+            else RewardConfig.sparse()
+        )
+        if not isinstance(self.reward_config, RewardModel):
+            raise ValueError("resolved reward must implement compute(env, context)")
+        self.invalid_action_penalty = float(
+            invalid_action_penalty
+            if invalid_action_penalty is not None
+            else getattr(self.reward_config, "w_invalid", RewardConfig().w_invalid)
+        )
+        if not np.isfinite(self.invalid_action_penalty) or self.invalid_action_penalty < 0:
+            raise ValueError("invalid_action_penalty must be a finite non-negative number")
         self.goal = self.config.goal or default_goal()
         self.phase = phase
         if phase == 1:
@@ -118,6 +142,13 @@ class LogHrcEnv(gym.Env):
         self._profile_pool = profile_pool or phase_pools.get(
             phase, self.config.default_profile_pool)
         self._human_model = human_model
+        from loghrc.humans.pools import POOLS
+        if self._profile_arg == "sample" and self._profile_pool not in POOLS:
+            raise ValueError(f"unknown human profile pool {self._profile_pool!r}")
+        if self._human_model is not None:
+            for method in ("reset", "decide", "on_task_completed"):
+                if not callable(getattr(self._human_model, method, None)):
+                    raise ValueError(f"human_model must define {method}()")
         if randomization is True:
             base = self.config.randomization or RandomizationConfig()
             self.randomization = replace(
@@ -132,6 +163,10 @@ class LogHrcEnv(gym.Env):
             self.randomization = randomization
         from loghrc.constraints.graph import resolve_graph
         self.graph = resolve_graph(self.config, graph)
+        if self.graph is not None:
+            for method in ("pick_useful", "allows_place_target", "allows_attach"):
+                if not callable(getattr(self.graph, method, None)):
+                    raise ValueError(f"graph must define {method}()")
         if validate:
             from loghrc.core.validate import check_geometry, check_graph
             issues = check_geometry(self.config) + check_graph(self.config)
@@ -531,31 +566,17 @@ class LogHrcEnv(gym.Env):
     # Reward (DESIGN.md §2.5)
     # ------------------------------------------------------------------
     def _compute_reward(self, robot_action_valid: bool, terminated: bool) -> float:
-        rc = self.reward_config
-        reward = 0.0
-        joints = sum(1 for e in self._window if e["type"] == "joint")
-        places = sum(1 for e in self._window if e["type"] == "placed")
-        safety = sum(1 for e in self._window if e["type"] == "safety")
-        blocked = sum(1 for e in self._window if e["type"] == "human_blocked")
-        conflicts = sum(1 for e in self._window if e["type"] == "conflict")
-        if rc.shaping:
-            reward += rc.w_joint * joints + rc.w_place * places
-        if rc.fluency:
-            reward -= rc.w_human_blocked_idle * blocked
-            reward -= rc.w_conflict * conflicts
-            reward -= rc.w_safety * safety
-        if rc.step_penalty:
-            reward -= rc.w_tick * (self.t - self._last_decision_t)
+        context = RewardContext(
+            events=tuple(MappingProxyType(dict(event)) for event in self._window),
+            elapsed_ticks=self.t - self._last_decision_t,
+            robot_action_valid=robot_action_valid,
+            terminated=terminated,
+        )
+        reward = float(self.reward_config.compute(self, context))
         if not robot_action_valid and (
-                self.constraint_mode == "penalty" or rc.invalid_penalty):
-            reward -= rc.w_invalid
-        if terminated:
-            reward += rc.completion
-            if rc.time_bonus:
-                reward += rc.w_time_bonus * max(0, self.config.max_ticks - self.t)
-            if (rc.division_bonus and self.phase == 2
-                    and self.counters.robot_tasks > 0 and self.counters.human_tasks > 0):
-                reward += rc.w_division
+                self.constraint_mode == "penalty"
+                or getattr(self.reward_config, "invalid_penalty", False)):
+            reward -= self.invalid_action_penalty
         self._last_decision_t = self.t
         return float(reward)
 
@@ -614,18 +635,21 @@ class LogHrcEnv(gym.Env):
                 "experiment": experiment,
                 "randomized": self.randomization is not None,
                 "goal": self.goal.describe(),
-                "reward": self.reward_config.to_dict(),
-                "reward_hash": self.reward_config.reward_hash(),
+                "reward": reward_spec(self.reward_config),
+                "reward_hash": resolved_reward_hash(self.reward_config),
                 "graph": type(self.graph).__name__ if self.graph is not None else None,
                 "constraint_mode": self.constraint_mode,
+                "invalid_action_penalty": self.invalid_action_penalty,
                 "grid_size": list(self.config.grid_size),
                 "phase": self.phase,
                 "allocation": self.allocation,
                 "seed": self._seed_used,
                 "episode_id": self.episode_id,
                 "profile": self.human_profile.to_dict(),
+                "part_classes": part_class_manifest(p.cls for p in self.config.parts),
                 "parts": [
-                    {"id": p.id, "name": p.name, "cls": p.cls.name, "size": list(p.size),
+                    {"id": p.id, "name": p.name, "cls": part_class_name(p.cls),
+                     "size": list(p.size),
                      "start": list(self.start_of(p.id).as_tuple()),
                      "target": list(self.target_of(p.id).as_tuple())}
                     for p in self.config.parts
@@ -664,8 +688,9 @@ class LogHrcEnv(gym.Env):
             "constraint_mode": self.constraint_mode,
             "graph": component_spec(self.graph),
             "goal": component_spec(self.goal),
-            "reward": self.reward_config.to_dict(),
-            "reward_hash": self.reward_config.reward_hash(),
+            "reward": reward_spec(self.reward_config),
+            "reward_hash": resolved_reward_hash(self.reward_config),
+            "invalid_action_penalty": self.invalid_action_penalty,
             "allocation": component_spec(self.allocation),
             "human_profile_argument": component_spec(self._profile_arg),
             "human_profile_pool": self._profile_pool,

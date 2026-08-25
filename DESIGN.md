@@ -16,7 +16,7 @@ loghrc/
   core/          task-agnostic engine — imports NOTHING from the layers below
                  (enforced by test_core_imports_no_plugins)
     config.py      TaskConfig schema (geometry, parts, joints, goal, reward, ...)
-    labels.py      part classes (global ids; per-task channel layouts)
+    labels.py      built-in + user-registered classes; per-task channel layouts
     physics.py     the ONLY constraints the free sim enforces (occupancy,
                    support, hands, bounds)
     env.py         durative tick engine + Gymnasium API
@@ -47,12 +47,14 @@ loghrc/
    layouts. `label_grid` is not an env observation mode — nothing trains on
    it, so it was removed from `LogHrcEnv` (2026-08-25); the same lossy
    projection survives solely in `core.replay.Replay.label_grid` for the
-   offline viewer and gif/mp4 exporter.
+   offline viewer and gif/mp4 exporter. External tasks add semantic classes
+   with `register_part_class`; logs embed their names and colors.
 2. **Free simulator + pluggable constraints.** For controlled ablations, task
    validity is fixed while the learning signal changes: `constraint_mode=mask`
    exposes physics ∧ graph ∧ allocation, `penalty` exposes all actions and
    penalizes invalid no-ops, and `none` exposes all actions without that
-   penalty. `graph=None` is the separate physics-only free simulator. The
+   penalty. `graph=None` removes graph semantics; Phase-1 allocation remains,
+   while `phase=2, graph=None` gives physics-only validity. The
    scripted human owns a PRIVATE DefaultTaskGraph, so it stays procedurally
    sensible when the environment graph is absent.
 3. **Task schema.** Geometry + entities + joints + goal + reward + optional
@@ -63,7 +65,9 @@ loghrc/
    Tasks declare their canonical reward (furniture → hrc_composite, two_block
    → case_toy); env argument overrides both (ablation arms). Metrics stay
    global (comparable fluency ontology across tasks); task-specific analysis
-   derives from episode logs.
+   derives from episode logs. Tasks with different reward semantics implement
+   `RewardModel.compute(env, context)`; the invalid-action penalty remains an
+   environment-level constraint-arm overlay.
 5. **Frontier heuristic** (ex `pick_is_useful`) is owned by the graph layer as
    `pick_useful` with `strict_frontier` flag: True = mask picks to the
    immediately-placeable frontier (efficient masked exploration); False =
@@ -199,6 +203,8 @@ loghrc/
 ```
 
 **Pluggability contracts:** tasks via `register_task` (gym id `LogHrc-<task>-v0`);
+semantic classes via `register_part_class`; task-specific rewards via
+`RewardModel.compute(env, context)`;
 human models via the `ScriptedPolicy` interface (`reset`/`decide`/`on_task_completed`);
 task-graph semantics via `TaskConfig.graph_factory` (default: AND-precedence).
 

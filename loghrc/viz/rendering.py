@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
+from loghrc.core.labels import PartClass, color_for_class_name
 from loghrc.core.viz_labels import (
     LABEL_HUMAN,
     LABEL_ROBOT_GRIPPER,
@@ -24,22 +25,25 @@ from loghrc.core.replay import Replay
 
 # Class colors (targets = same hue, translucent)
 _CLASS_COLORS = {
-    1: "#c8912f",   # BOARD
-    2: "#8a5a2b",   # DOWEL
-    3: "#4878a8",   # TOP_BRACKET
-    4: "#5aa05a",   # FOOT_BRACKET
-    5: "#a86ab8",   # SIDE_PANEL
-    6: "#b85a5a",   # BACK_SLAT
-    7: "#2e8b2e",   # GREEN_BLOCK (toy problem)
-    8: "#e0c93f",   # YELLOW_BLOCK
-    9: "#a03030",   # RED_BLOCK
+    int(part_class): color_for_class_name(part_class.name)
+    for part_class in PartClass
 }
 _GRIPPER_COLOR = "#d62728"
 _HUMAN_COLOR = "#ff9900"
 
 
-def _color_table() -> dict[int, tuple]:
+def _color_table(replay: Replay | None = None) -> dict[int, tuple]:
     from matplotlib.colors import to_rgba
+
+    if replay is not None:
+        table: dict[int, tuple] = {}
+        base_labels = set(replay.class_labels.values())
+        target_labels = {label + replay.target_offset for label in base_labels}
+        for label, color in replay.visualization_colors().items():
+            alpha = (0.15 if label in target_labels
+                     else 0.9 if label == replay.human_label else 1.0)
+            table[label] = to_rgba(color, alpha)
+        return table
 
     table: dict[int, tuple] = {}
     for cls, col in _CLASS_COLORS.items():
@@ -50,8 +54,9 @@ def _color_table() -> dict[int, tuple]:
     return table
 
 
-def render_grid(ax, grid: np.ndarray, title: str = "") -> None:
-    colors = _color_table()
+def render_grid(ax, grid: np.ndarray, title: str = "",
+                colors: dict[int, tuple] | None = None) -> None:
+    colors = colors or _color_table()
     filled = grid > 0
     facecolors = np.zeros(grid.shape + (4,), dtype=float)
     for label, rgba in colors.items():
@@ -72,6 +77,7 @@ def export_video(episode_path: str | Path, out_path: str | Path,
     replay = Replay.load(episode_path)
     states = [s for i, s in enumerate(replay.states()) if i % every == 0]
     grids = [replay.label_grid(s) for s in states]
+    colors = _color_table(replay)
 
     fig = plt.figure(figsize=(7, 6))
     ax = fig.add_subplot(111, projection="3d")
@@ -85,8 +91,10 @@ def export_video(episode_path: str | Path, out_path: str | Path,
             f"{'R' if a == 0 else 'H'}:{act['verb']}({act.get('name') or ''})"
             for a, act in s.active.items() if act
         )
-        render_grid(ax, grids[i],
-                    title=f"{replay.header['config']}  tick {s.tick}/{replay.final_tick}  {active}")
+        render_grid(
+            ax, grids[i], colors=colors,
+            title=f"{replay.header['config']}  tick {s.tick}/{replay.final_tick}  {active}",
+        )
         return []
 
     anim = animation.FuncAnimation(fig, draw, frames=len(states), blit=False)

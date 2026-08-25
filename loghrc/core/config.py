@@ -8,9 +8,13 @@ nothing about furniture, blocks, or any concrete domain.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from loghrc.core.labels import PartClass
+from loghrc.core.labels import PartClass, PartLabel
 from loghrc.core.provenance import component_spec, fingerprint
+
+if TYPE_CHECKING:  # pragma: no cover
+    from loghrc.core.reward import RewardModel
 
 ROBOT = 0
 HUMAN = 1
@@ -33,7 +37,7 @@ class Vox:
 class PartSpec:
     id: int
     name: str
-    cls: PartClass
+    cls: PartClass | PartLabel
     size: tuple[int, int, int]
     start: Vox
     target: Vox
@@ -104,7 +108,7 @@ class TaskConfig:
     # Task-owned goal; None -> default "all parts at targets and all joints done".
     goal: "object | None" = None
     # Task-owned canonical reward; None -> engine default (sparse, goal-only).
-    reward: "object | None" = None
+    reward: "RewardModel | None" = None
     # Fixed Phase-1 split (group name -> agent). None = derive a default.
     phase1_allocation: dict[str, int] | None = None
     # Which profile pool "sample" draws from (see humans.pools.POOLS).
@@ -114,7 +118,7 @@ class TaskConfig:
     # Optional per-episode layout randomization (env can override/disable).
     randomization: RandomizationConfig | None = None
     # Pluggable task-graph semantics factory (constraints.graph.DefaultTaskGraph
-    # if unset when a graph is requested). Excluded from version_hash.
+    # if unset when a graph is requested).
     graph_factory: "object | None" = None
 
     def part(self, part_id: int) -> PartSpec:
