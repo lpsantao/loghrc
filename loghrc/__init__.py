@@ -50,6 +50,8 @@ _EXPORTS = {
     "two_leg_table_config": "loghrc.tasks",
     "full_table_config": "loghrc.tasks",
     "two_block_config": "loghrc.tasks",
+    "three_block_linear_config": "loghrc.tasks",
+    "three_block_branching_config": "loghrc.tasks",
 }
 
 __all__ = ["__version__", *_EXPORTS]

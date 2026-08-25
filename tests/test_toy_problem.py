@@ -5,7 +5,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from loghrc.tasks import two_block_config
+from loghrc.tasks import (
+    three_block_branching_config,
+    three_block_linear_config,
+    two_block_config,
+)
 from loghrc.configs import HUMAN, ROBOT, RewardConfig
 from loghrc.env import LogHrcEnv
 from loghrc.episode_log import EpisodeRecorder
@@ -43,6 +47,46 @@ def test_toy_linear_task_graph_mask():
     yellow = env.config.parts[1].id
     assert info["action_mask"][action_id(env, "pick", green)]
     assert not info["action_mask"][action_id(env, "pick", yellow)]
+
+
+def test_toy_sample_pool_follows_phase():
+    phase1 = LogHrcEnv(config=two_block_config(), phase=1, human_profile="sample")
+    phase2 = LogHrcEnv(config=two_block_config(), phase=2, human_profile="sample")
+    names1, names2 = set(), set()
+    for seed in range(20):
+        phase1.reset(seed=seed)
+        phase2.reset(seed=seed)
+        names1.add(phase1.human_profile.name)
+        names2.add(phase2.human_profile.name)
+    assert names1 <= {"expert", "cautious", "impatient", "static"}
+    assert names2 <= {"prefer_green", "prefer_yellow", "flexible", "competitive"}
+    assert names1 and names2
+
+
+@pytest.mark.parametrize(
+    "config_fn", [three_block_linear_config, three_block_branching_config],
+)
+@pytest.mark.parametrize("phase", [1, 2])
+def test_three_block_scripted_completion(config_fn, phase):
+    profile = "expert" if phase == 1 else "flexible"
+    env = LogHrcEnv(config=config_fn(), phase=phase, human_profile=profile)
+    success, info = run_scripted(env, seed=3)
+    assert success, info["progress"]
+
+
+def test_three_block_linear_and_branching_frontiers():
+    linear = LogHrcEnv(
+        config=three_block_linear_config(), phase=2, human_profile="flexible")
+    branching = LogHrcEnv(
+        config=three_block_branching_config(), phase=2, human_profile="flexible")
+    _, linear_info = linear.reset(seed=0)
+    _, branch_info = branching.reset(seed=0)
+
+    def pick_mask(env, info, part_id):
+        return bool(info["action_mask"][action_id(env, "pick", part_id)])
+
+    assert [pick_mask(linear, linear_info, pid) for pid in (1, 2, 3)] == [True, False, False]
+    assert [pick_mask(branching, branch_info, pid) for pid in (1, 2, 3)] == [True, True, False]
 
 
 def test_toy_case_reward_constants():

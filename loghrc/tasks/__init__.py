@@ -2,7 +2,11 @@
 
 from loghrc.tasks.registry import get_task, list_tasks, register_task
 from loghrc.tasks.furniture import chair_config, full_table_config, two_leg_table_config
-from loghrc.tasks.blocks import two_block_config
+from loghrc.tasks.blocks import (
+    three_block_branching_config,
+    three_block_linear_config,
+    two_block_config,
+)
 
 # Importing this package registers one Gymnasium id per built-in task.
 from gymnasium.envs.registration import register as _register, registry as _registry
