@@ -10,13 +10,13 @@ behaves procedurally sensibly even when the env itself runs graph-free.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from loghrc.core import physics
-from loghrc.core.config import Group, TaskConfig
+from loghrc.core.config import Group, ROBOT, TaskConfig
 from loghrc.humans.interface import HumanModel
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -102,6 +102,8 @@ class ScriptedPolicy(HumanModel):
             return "wait", None, "blocked"
 
         if not self.engaged:
+            if not self._at_home(env):
+                return "move_home", None, "act"
             return "wait", None, "disengaged"
 
         task = self._next_task(env)
@@ -109,6 +111,11 @@ class ScriptedPolicy(HumanModel):
             self._blocked_streak += 1
             if self.profile.patience is not None and self._blocked_streak > self.profile.patience:
                 self.engaged = False  # patience exhausted (CASE low-patience profiles)
+            # Retreat while blocked instead of resting at the last work point:
+            # a dependency may later let the other agent place a part around
+            # that stationary hand (DESIGN.md §3: hands stay outside parts).
+            if not self._at_home(env):
+                return "move_home", None, "act"
             return "wait", None, "blocked"
         self._blocked_streak = 0
         # Safety-margin hesitation: hold off while the robot hand is too close.
@@ -125,6 +132,26 @@ class ScriptedPolicy(HumanModel):
         return task[0], task[1], "act"
 
     # ------------------------------------------------------------------
+    def _fully_done(self, env: "LogHrcEnv") -> bool:
+        """True iff every part/joint in every group allocated to this agent
+        is finished — nothing will ever become available again, as opposed
+        to a transient block (e.g. waiting on the other agent's support)."""
+
+        for g in self._my_groups(env):
+            for pid in g.part_ids:
+                st = env.parts[pid]
+                if not (st.at_target or st.attached):
+                    return False
+            for jid in g.joint_ids:
+                if not env.joints_done[jid]:
+                    return False
+        return True
+
+    def _at_home(self, env: "LogHrcEnv") -> bool:
+        home = env.config.home_robot if self.agent == ROBOT else env.config.home_human
+        hand = env.agents[self.agent].hand
+        return max(abs(a - b) for a, b in zip(hand, home.as_tuple())) < 0.5
+
     def _my_groups(self, env: "LogHrcEnv") -> list[Group]:
         groups = []
         for name in self._order:

@@ -18,7 +18,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from loghrc.core.config import JointSpec, PartSpec
-from loghrc.core import physics
 
 if TYPE_CHECKING:  # pragma: no cover
     from loghrc.core.env import LogHrcEnv
@@ -46,7 +45,9 @@ class DefaultTaskGraph:
         if st.attached or st.at_target:
             return False
         supports_ok = all(world.parts[s].at_target for s in part.support)
-        return supports_ok and self.allows_place_target(world, part)
+        target_free = world.region_free(world.target_of(part.id), part.size,
+                                        ignore_part_id=part.id)
+        return supports_ok and target_free and self.allows_place_target(world, part)
 
 
 def resolve_graph(config, graph) -> "DefaultTaskGraph | None":

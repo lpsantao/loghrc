@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import subprocess
+import sys
 
 import gymnasium as gym
 import numpy as np
@@ -37,6 +39,15 @@ def test_all_builtin_tasks_validate():
         validate_task(get_task(name), randomized_trials=3)
 
 
+def test_public_validator_module_runs_cli():
+    result = subprocess.run(
+        [sys.executable, "-m", "loghrc.validate", "two_block"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "[ok]   two_block" in result.stdout
+
+
 def _minimal_config(**overrides) -> TaskConfig:
     a = PartSpec(id=1, name="a", cls=PartClass.GREEN_BLOCK, size=(2, 2, 2),
                  start=Vox(0, 0, 0), target=Vox(5, 5, 0))
@@ -60,6 +71,18 @@ def test_geometry_catches_overlapping_targets():
     cfg = _minimal_config(parts=(a, b))
     issues = check_geometry(cfg)
     assert any("target overlap" in i for i in issues)
+    with pytest.raises(TaskValidationError):
+        validate_task(cfg)
+
+
+def test_geometry_catches_start_target_cross_overlap():
+    a = PartSpec(id=1, name="a", cls=PartClass.GREEN_BLOCK, size=(2, 2, 2),
+                 start=Vox(0, 0, 0), target=Vox(5, 5, 0))
+    b = PartSpec(id=2, name="b", cls=PartClass.YELLOW_BLOCK, size=(2, 2, 2),
+                 start=Vox(5, 5, 0), target=Vox(8, 8, 0))  # b's start sits in a's target
+    cfg = _minimal_config(parts=(a, b))
+    issues = check_geometry(cfg)
+    assert any("start/target overlap" in i for i in issues)
     with pytest.raises(TaskValidationError):
         validate_task(cfg)
 
@@ -109,6 +132,16 @@ def test_randomization_off_by_default():
         assert env.target_of(p.id) == p.target
 
 
+def test_randomization_true_enables_both_switches():
+    config = full_table_config()
+    env = LogHrcEnv(config=config, randomization=True)
+    assert env.randomization.randomize_starts
+    assert env.randomization.randomize_goal
+    env.reset(seed=42)
+    assert any(env.start_of(p.id) != p.start for p in config.parts)
+    assert any(env.target_of(p.id) != p.target for p in config.parts)
+
+
 def test_randomization_deterministic_per_seed():
     env1, env2 = _rand_env(full_table_config()), _rand_env(full_table_config())
     env1.reset(seed=42)
@@ -136,6 +169,20 @@ def test_randomized_layouts_are_valid_and_solvable(tmp_path):
                 pid: v.as_tuple() for pid, v in inner.episode_starts.items()
             }
             assert replay.header["randomized"] is True
+
+
+@pytest.mark.parametrize("starts,goal", [(True, False), (False, True), (True, True)])
+def test_every_randomization_combination_is_solvable(starts, goal):
+    for name in list_tasks():
+        config = get_task(name)
+        rc = replace(
+            config.randomization or RandomizationConfig(),
+            randomize_starts=starts,
+            randomize_goal=goal,
+        )
+        env = LogHrcEnv(config=config, phase=1, human_profile="sample", randomization=rc)
+        success, info = run_scripted(env, seed=9)
+        assert success, f"{name}, starts={starts}, goal={goal}: {info['progress']}"
 
 
 def test_goal_randomization_moves_goal():

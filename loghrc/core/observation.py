@@ -10,9 +10,6 @@ exclusive (multi-label voxels):
 - ASSEMBLED overlays the voxels of every part with >= 1 fastened joint
   (fastening changes no geometry, so this bit is irreducibly its own channel);
 - target ghosts may overlap real occupancy.
-
-``label_grid`` (one integer per voxel) survives only as a lossy projection
-for debugging/visualization.
 """
 
 from __future__ import annotations
@@ -75,17 +72,3 @@ def build_observation(env: "LogHrcEnv", layout: ChannelLayout) -> np.ndarray:
     _paint(obs[layout.gripper], env.clip_pose(env.agents[ROBOT].hand, (1, 1, 1)), (1, 1, 1))
     _paint(obs[layout.human], env.clip_pose(env.agents[HUMAN].hand, HUMAN_BLOB), HUMAN_BLOB)
     return obs
-
-
-def label_grid_projection(env: "LogHrcEnv", layout: ChannelLayout) -> np.ndarray:
-    """Lossy single-integer-per-voxel view for debugging (priority: parts >
-    targets; agents painted only into empty voxels). Value = channel index + 1."""
-
-    obs = build_observation(env, layout)
-    grid = np.zeros(env.config.grid_size, dtype=np.uint8)
-    order = ([layout.target_channel[c] for c in layout.classes]
-             + [layout.human, layout.gripper]
-             + [layout.class_channel[c] for c in layout.classes])
-    for ch in order:  # later paints win: parts end on top
-        grid[obs[ch] == 1] = ch + 1
-    return grid

@@ -9,7 +9,8 @@ through ``action_masks()``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import copy
+from dataclasses import dataclass, replace
 from typing import Any
 
 import gymnasium as gym
@@ -25,12 +26,10 @@ from loghrc.core.config import (
     TaskConfig,
     Vox,
 )
+from loghrc.core.geometry import boxes_overlap, pos_along_path
 from loghrc.core.goal import default_goal
-from loghrc.core.observation import (
-    ChannelLayout,
-    build_observation,
-    label_grid_projection,
-)
+from loghrc.core.observation import ChannelLayout, build_observation
+from loghrc.core.provenance import component_spec, fingerprint, runtime_manifest, source_manifest
 from loghrc.core.randomization import sample_layout
 from loghrc.core.reward import RewardConfig
 
@@ -54,28 +53,7 @@ class ActiveAction:
     safety_flagged: bool = False
 
     def position(self, progress: float) -> tuple[float, float, float]:
-        return _pos_along(self.path, progress)
-
-
-def _pos_along(path: list[tuple[float, float, float]], progress: float) -> tuple[float, float, float]:
-    """Point at fractional arc-length ``progress`` along a polyline."""
-
-    if len(path) == 1:
-        return path[0]
-    seg_lens = [
-        sum((b - a) ** 2 for a, b in zip(p, q)) ** 0.5
-        for p, q in zip(path[:-1], path[1:])
-    ]
-    total = sum(seg_lens)
-    if total <= 1e-9:
-        return path[-1]
-    d = max(0.0, min(1.0, progress)) * total
-    for (p, q), L in zip(zip(path[:-1], path[1:]), seg_lens):
-        if d <= L + 1e-9:
-            f = 1.0 if L <= 1e-9 else min(1.0, d / L)
-            return tuple(a + (b - a) * f for a, b in zip(p, q))
-        d -= L
-    return path[-1]
+        return pos_along_path(self.path, progress)
 
 
 @dataclass
@@ -92,6 +70,7 @@ class _Counters:
     invalid_robot: int = 0
     human_idle_blocked: int = 0
     human_idle_choice: int = 0
+    human_blocked_attempts: int = 0
     human_interruptions: int = 0
     failed_actions: int = 0
     robot_tasks: int = 0   # successful place_target/attach by the robot
@@ -112,8 +91,8 @@ class LogHrcEnv(gym.Env):
         human_model: "object | None" = None,
         randomization: RandomizationConfig | bool | None = None,
         graph: "object | str | None" = "default",    # None = free sim (physics-only mask)
+        constraint_mode: str = "mask",  # mask | penalty | none
         validate: bool = True,
-        observation_mode: str = "channels",
         show_targets: bool = True,
         render_mode: str | None = None,
     ) -> None:
@@ -121,6 +100,9 @@ class LogHrcEnv(gym.Env):
             from loghrc.tasks import two_leg_table_config
             config = two_leg_table_config()
         self.config = config
+        if constraint_mode not in ("mask", "penalty", "none"):
+            raise ValueError("constraint_mode must be 'mask', 'penalty', or 'none'")
+        self.constraint_mode = constraint_mode
         # reward precedence: env override > task-owned > engine sparse default
         self.reward_config = reward_config or self.config.reward or RewardConfig.sparse()
         self.goal = self.config.goal or default_goal()
@@ -132,10 +114,14 @@ class LogHrcEnv(gym.Env):
             self.allocation = None
         self._profile_arg = human_profile
         self._held_out = held_out_profiles
-        self._profile_pool = profile_pool or self.config.default_profile_pool
+        phase_pools = self.config.profile_pool_by_phase or {}
+        self._profile_pool = profile_pool or phase_pools.get(
+            phase, self.config.default_profile_pool)
         self._human_model = human_model
         if randomization is True:
-            self.randomization = self.config.randomization or RandomizationConfig()
+            base = self.config.randomization or RandomizationConfig()
+            self.randomization = replace(
+                base, randomize_starts=True, randomize_goal=True)
         elif randomization is False:
             self.randomization = None
         elif randomization is None:
@@ -152,7 +138,6 @@ class LogHrcEnv(gym.Env):
             if issues:
                 raise ValueError(
                     f"invalid task config {self.config.name!r}:\n  - " + "\n  - ".join(issues))
-        self.observation_mode = observation_mode
         self.show_targets = show_targets
         self.render_mode = render_mode
 
@@ -166,14 +151,8 @@ class LogHrcEnv(gym.Env):
 
         x, y, z = self.config.grid_size
         self.layout = ChannelLayout(self.config)
-        if observation_mode == "channels":
-            self.observation_space = spaces.Box(
-                0, 1, shape=(self.layout.num_channels, x, y, z), dtype=np.uint8)
-        elif observation_mode == "label_grid":
-            self.observation_space = spaces.Box(
-                0, self.layout.num_channels, shape=(x, y, z), dtype=np.uint8)
-        else:
-            raise ValueError("observation_mode must be 'channels' or 'label_grid'")
+        self.observation_space = spaces.Box(
+            0, 1, shape=(self.layout.num_channels, x, y, z), dtype=np.uint8)
 
         self._part_joints: dict[int, list[int]] = {p.id: [] for p in self.config.parts}
         for j in self.config.joints:
@@ -186,6 +165,8 @@ class LogHrcEnv(gym.Env):
         self.t = 0
         self.episode_id = -1
         self._seed_used: int | None = None
+        # Capture identity before reset() mutates a custom human model.
+        self._experiment_manifest = self._build_experiment_manifest()
 
     # ------------------------------------------------------------------
     # Gymnasium API
@@ -240,9 +221,16 @@ class LogHrcEnv(gym.Env):
     def step(self, action: int):
         if self._episode_over:
             raise RuntimeError("step() after episode end; call reset()")
-        verb, arg = self._actions[int(action)]
+        action = int(action)
+        if not self.action_space.contains(action):
+            raise ValueError(f"action {action} outside {self.action_space}")
+        verb, arg = self._actions[action]
         self._window = []
-        valid, message = self._start_action(ROBOT, verb, arg)
+        from loghrc.constraints.masking import procedural_mask
+        if not procedural_mask(self)[action]:
+            valid, message = False, "blocked by task graph or allocation"
+        else:
+            valid, message = self._start_action(ROBOT, verb, arg)
         if not valid:
             self.counters.invalid_robot += 1
             self._log_event({"type": "invalid", "agent": ROBOT, "verb": verb, "arg": arg,
@@ -286,9 +274,10 @@ class LogHrcEnv(gym.Env):
                 ok, msg = self._start_action(HUMAN, verb, arg)
                 if not ok:
                     self.counters.conflicts += 1
-                    self.counters.human_interruptions += 1
+                    self.counters.human_blocked_attempts += 1
                     self._log_event({"type": "conflict", "agent": HUMAN, "verb": verb,
                                      "arg": arg, "message": msg})
+                    self._window.append({"type": "conflict"})
                     self.counters.human_idle_blocked += 1
             elif reason == "blocked":
                 self.counters.human_idle_blocked += 1
@@ -420,7 +409,9 @@ class LogHrcEnv(gym.Env):
     def _finish(self, agent: int, act: ActiveAction) -> None:
         ok = True
         payload: dict[str, Any] = {}
-        if act.verb == "pick":
+        if act.verb == "invalid":
+            ok = False
+        elif act.verb == "pick":
             st = self.parts[act.arg]
             st.held_by = agent
             st.pose = None
@@ -434,8 +425,6 @@ class LogHrcEnv(gym.Env):
             if not self.region_free(dest, part.size, ignore_part_id=act.arg):
                 ok = False
                 self.counters.failed_actions += 1
-                if agent == HUMAN:
-                    self.counters.human_interruptions += 1
             else:
                 st.pose = dest
                 st.held_by = None
@@ -454,8 +443,6 @@ class LogHrcEnv(gym.Env):
             if not ok_now or error:
                 ok = False
                 self.counters.failed_actions += 1
-                if agent == HUMAN and error:
-                    self.counters.human_interruptions += 1
             else:
                 self.joints_done[act.arg] = True
                 for pid in joint.parts:
@@ -463,7 +450,7 @@ class LogHrcEnv(gym.Env):
                 payload["joint_done"] = True
                 self._window.append({"type": "joint", "agent": agent, "joint": act.arg})
                 self._task_completed(agent)
-        # move_home / wait / invalid: no state change
+        # move_home / wait: no state change
         self._log_event({"type": "action_end", "agent": agent, "verb": act.verb,
                          "arg": act.arg, "name": self._arg_name(act.verb, act.arg),
                          "ok": ok, **payload})
@@ -496,9 +483,7 @@ class LogHrcEnv(gym.Env):
             if pid == ignore_part_id or st.pose is None:
                 continue
             spec = self.config.part(pid)
-            bx0, by0, bz0 = st.pose.as_tuple()
-            bx1, by1, bz1 = bx0 + spec.size[0], by0 + spec.size[1], bz0 + spec.size[2]
-            if ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1 and az0 < bz1 and bz0 < az1:
+            if boxes_overlap((ax0, ay0, az0), size, st.pose.as_tuple(), spec.size):
                 return False
         return True
 
@@ -517,23 +502,23 @@ class LogHrcEnv(gym.Env):
     # Mask (task graph + allocation; DESIGN.md §2.4)
     # ------------------------------------------------------------------
     def action_masks(self) -> np.ndarray:
-        """Layered mask: physics ∧ [graph] ∧ [allocation] (constraints.masking).
-        With graph=None and no allocation this is physics-only — the free sim."""
+        """Policy-facing action mask for the selected constraint arm.
+
+        ``mask`` exposes physics ∧ graph ∧ allocation. ``penalty`` and ``none``
+        expose every action; invalid actions remain no-ops so task semantics are
+        identical across all three arms. ``graph=None`` separately removes task-
+        graph validity from the environment for physics-only/free-sim use.
+        """
 
         from loghrc.constraints.masking import compose
-        return compose(self)
+        if self.constraint_mode == "mask":
+            return compose(self)
+        return np.ones(len(self._actions), dtype=bool)
 
     # ------------------------------------------------------------------
     # Observation (labelled voxel grid, DESIGN.md §2.10)
     # ------------------------------------------------------------------
-    def label_grid(self) -> np.ndarray:
-        """Lossy single-integer projection — debugging/visualization only."""
-
-        return label_grid_projection(self, self.layout)
-
     def _observation(self) -> np.ndarray:
-        if self.observation_mode == "label_grid":
-            return self.label_grid()
         return build_observation(self, self.layout)
 
     def clip_pose(self, pos, size) -> tuple[int, int, int]:
@@ -552,8 +537,7 @@ class LogHrcEnv(gym.Env):
         places = sum(1 for e in self._window if e["type"] == "placed")
         safety = sum(1 for e in self._window if e["type"] == "safety")
         blocked = sum(1 for e in self._window if e["type"] == "human_blocked")
-        conflicts = sum(1 for e in self.events
-                        if e.get("type") == "conflict" and e["t"] > self._last_decision_t)
+        conflicts = sum(1 for e in self._window if e["type"] == "conflict")
         if rc.shaping:
             reward += rc.w_joint * joints + rc.w_place * places
         if rc.fluency:
@@ -562,7 +546,8 @@ class LogHrcEnv(gym.Env):
             reward -= rc.w_safety * safety
         if rc.step_penalty:
             reward -= rc.w_tick * (self.t - self._last_decision_t)
-        if rc.invalid_penalty and not robot_action_valid:
+        if not robot_action_valid and (
+                self.constraint_mode == "penalty" or rc.invalid_penalty):
             reward -= rc.w_invalid
         if terminated:
             reward += rc.completion
@@ -592,6 +577,7 @@ class LogHrcEnv(gym.Env):
             "action_mask": self.action_masks(),
             "progress": self.progress(),
             "profile": self.human_profile.name,
+            "constraint_mode": self.constraint_mode,
         }
 
     def metrics_summary(self, success: bool) -> dict[str, Any]:
@@ -601,9 +587,11 @@ class LogHrcEnv(gym.Env):
             "ticks": self.t,
             "conflicts": c.conflicts,
             "safety_violations": c.safety_violations,
+            "proximity_violations": c.safety_violations,
             "invalid_robot_actions": c.invalid_robot,
             "human_idle_blocked": c.human_idle_blocked,
             "human_idle_choice": c.human_idle_choice,
+            "human_blocked_attempts": c.human_blocked_attempts,
             "human_interruptions": c.human_interruptions,
             "failed_actions": c.failed_actions,
             "joints_done": sum(self.joints_done.values()),
@@ -615,14 +603,21 @@ class LogHrcEnv(gym.Env):
     def episode_record(self) -> dict[str, Any]:
         """Full record for the episode logger (header + events + footer)."""
 
+        experiment = self.experiment_manifest()
         return {
             "header": {
                 "loghrc_version": __import__("loghrc.__about__", fromlist=["__version__"]).__version__,
                 "config": self.config.name,
-                "config_hash": self.config.version_hash(),
+                "task_hash": self.config.task_hash(),
+                "config_hash": self.config.task_hash(),  # compatibility alias
+                "experiment_hash": experiment["experiment_hash"],
+                "experiment": experiment,
                 "randomized": self.randomization is not None,
                 "goal": self.goal.describe(),
+                "reward": self.reward_config.to_dict(),
+                "reward_hash": self.reward_config.reward_hash(),
                 "graph": type(self.graph).__name__ if self.graph is not None else None,
+                "constraint_mode": self.constraint_mode,
                 "grid_size": list(self.config.grid_size),
                 "phase": self.phase,
                 "allocation": self.allocation,
@@ -651,6 +646,41 @@ class LogHrcEnv(gym.Env):
                 },
                 "joints_done": {str(j): bool(v) for j, v in self.joints_done.items()},
             },
+        }
+
+    def experiment_manifest(self) -> dict[str, Any]:
+        """Resolved run-level identity, excluding episode seed/layout/outcome."""
+
+        return copy.deepcopy(self._experiment_manifest)
+
+    def _build_experiment_manifest(self) -> dict[str, Any]:
+        """Build the immutable identity captured at environment construction."""
+
+        identity = {
+            "schema": 1,
+            "task_hash": self.config.task_hash(),
+            "task": self.config.name,
+            "phase": self.phase,
+            "constraint_mode": self.constraint_mode,
+            "graph": component_spec(self.graph),
+            "goal": component_spec(self.goal),
+            "reward": self.reward_config.to_dict(),
+            "reward_hash": self.reward_config.reward_hash(),
+            "allocation": component_spec(self.allocation),
+            "human_profile_argument": component_spec(self._profile_arg),
+            "human_profile_pool": self._profile_pool,
+            "held_out_profiles": self._held_out,
+            "human_model": component_spec(self._human_model),
+            "randomization": component_spec(self.randomization),
+            "show_targets": self.show_targets,
+            "observation_channels": self.layout.names,
+            "action_table": self._actions,
+        }
+        return {
+            **identity,
+            "experiment_hash": fingerprint(identity),
+            "runtime": runtime_manifest(),
+            "source": source_manifest(),
         }
 
     def _log_event(self, event: dict[str, Any]) -> None:

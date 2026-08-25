@@ -22,6 +22,7 @@ import sys
 from dataclasses import replace
 
 from loghrc.core.config import ROBOT, TaskConfig
+from loghrc.core.geometry import boxes_overlap
 from loghrc.humans.profiles.library import RIGID_ROBOT_PROFILE
 from loghrc.humans.scripted import HumanProfile, ScriptedPolicy
 
@@ -31,10 +32,6 @@ class TaskValidationError(Exception):
 
 
 # ------------------------------------------------------------------ layer 1
-def _boxes_overlap(a_pose, a_size, b_pose, b_size) -> bool:
-    return (a_pose.x < b_pose.x + b_size[0] and b_pose.x < a_pose.x + a_size[0]
-            and a_pose.y < b_pose.y + b_size[1] and b_pose.y < a_pose.y + a_size[1]
-            and a_pose.z < b_pose.z + b_size[2] and b_pose.z < a_pose.z + a_size[2])
 
 
 def check_geometry(config: TaskConfig) -> list[str]:
@@ -54,10 +51,14 @@ def check_geometry(config: TaskConfig) -> list[str]:
     parts = list(config.parts)
     for i, a in enumerate(parts):
         for b in parts[i + 1:]:
-            if _boxes_overlap(a.start, a.size, b.start, b.size):
+            if boxes_overlap(a.start.as_tuple(), a.size, b.start.as_tuple(), b.size):
                 issues.append(f"start overlap: {a.name} / {b.name}")
-            if _boxes_overlap(a.target, a.size, b.target, b.size):
+            if boxes_overlap(a.target.as_tuple(), a.size, b.target.as_tuple(), b.size):
                 issues.append(f"target overlap: {a.name} / {b.name}")
+            if boxes_overlap(a.start.as_tuple(), a.size, b.target.as_tuple(), b.size):
+                issues.append(f"start/target overlap: {a.name} start / {b.name} target")
+            if boxes_overlap(b.start.as_tuple(), b.size, a.target.as_tuple(), a.size):
+                issues.append(f"start/target overlap: {b.name} start / {a.name} target")
     # hand travel plane: structure must stay below the top layer
     max_top = max((p.target.z + p.size[2] for p in config.parts), default=0)
     if max_top > gz - 1:
@@ -67,7 +68,7 @@ def check_geometry(config: TaskConfig) -> list[str]:
         if not (0 <= home.x < gx and 0 <= home.y < gy and 0 <= home.z < gz):
             issues.append(f"{name} out of bounds")
         for p in config.parts:
-            if _boxes_overlap(home, (1, 1, 1), p.target, p.size):
+            if boxes_overlap(home.as_tuple(), (1, 1, 1), p.target.as_tuple(), p.size):
                 issues.append(f"{name} inside {p.name}'s target")
     if config.randomization is not None and config.randomization.staging_region is not None:
         x0, y0, x1, y1 = config.randomization.staging_region

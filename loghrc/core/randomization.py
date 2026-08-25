@@ -11,20 +11,16 @@ from __future__ import annotations
 import numpy as np
 
 from loghrc.core.config import RandomizationConfig, TaskConfig, Vox
+from loghrc.core.geometry import boxes_overlap
 
 
 def _boxes(config: TaskConfig, d: dict[int, Vox]):
-    out = []
-    for pid, pose in d.items():
-        sx, sy, sz = config.part(pid).size
-        out.append((pid, pose.x, pose.y, pose.z, pose.x + sx, pose.y + sy, pose.z + sz))
-    return out
+    return [(pid, pose.as_tuple(), config.part(pid).size) for pid, pose in d.items()]
 
 
 def _overlap(p, q, c):
-    return (p[1] - c < q[4] and q[1] - c < p[4]
-            and p[2] - c < q[5] and q[2] - c < p[5]
-            and p[3] < q[6] and q[3] < p[6])
+    # clearance applies to x/y only: z is never randomized in this engine.
+    return boxes_overlap(p[1], p[2], q[1], q[2], clearance=(c, c, 0))
 
 
 def layout_clashes(config: TaskConfig, a: dict[int, Vox], b: dict[int, Vox],
@@ -41,6 +37,17 @@ def layout_clashes(config: TaskConfig, a: dict[int, Vox], b: dict[int, Vox],
                     continue
                 if _overlap(p, q, clearance):
                     return True
+    return False
+
+
+def layouts_cross_clash(config: TaskConfig, a: dict[int, Vox], b: dict[int, Vox],
+                        clearance: int) -> bool:
+    """Check only A-vs-B clashes, not valid touching inside an assembly."""
+
+    for p in _boxes(config, a):
+        for q in _boxes(config, b):
+            if p[0] != q[0] and _overlap(p, q, clearance):
+                return True
     return False
 
 
@@ -73,7 +80,8 @@ def sample_layout(
                 by1 = max(c.y + config.part(pid).size[1] for pid, c in cand.items())
                 if bx0 < rx1 and rx0 < bx1 and by0 < ry1 and ry0 < by1:
                     continue  # goal bbox must stay out of the staging region
-            if not rc.randomize_starts and layout_clashes(config, cand, starts, rc.min_clearance):
+            if not rc.randomize_starts and layouts_cross_clash(
+                    config, cand, starts, rc.min_clearance):
                 continue
             targets = cand
             break
@@ -83,28 +91,36 @@ def sample_layout(
     if rc.randomize_starts:
         region = rc.staging_region or (0, 0, gx, gy)
         x0, y0, x1, y1 = region
-        placed: dict[int, Vox] = {}
         order = sorted(config.parts, key=lambda p: p.size[0] * p.size[1], reverse=True)
-        for part in order:
-            sx, sy, sz = part.size
-            for _ in range(rc.max_tries):
-                px = int(rng.integers(x0, max(x0 + 1, x1 - sx + 1)))
-                py = int(rng.integers(y0, max(y0 + 1, y1 - sy + 1)))
-                cand = Vox(px, py, part.start.z)
-                if px + sx > gx or py + sy > gy or cand.z + sz > gz:
-                    continue
-                trial = dict(placed)
-                trial[part.id] = cand
-                if layout_clashes(config, trial, {}, rc.min_clearance, pairwise_only=True):
-                    continue
-                if layout_clashes(config, targets, trial, rc.min_clearance):
-                    continue
-                placed[part.id] = cand
+        # Restart the whole placement when early random choices leave no room
+        # for a later part. Retrying only the last part cannot recover from a
+        # fragmented-but-otherwise-large-enough staging region.
+        for _ in range(rc.max_tries):
+            placed: dict[int, Vox] = {}
+            for part in order:
+                sx, sy, sz = part.size
+                for _ in range(rc.max_tries):
+                    px = int(rng.integers(x0, max(x0 + 1, x1 - sx + 1)))
+                    py = int(rng.integers(y0, max(y0 + 1, y1 - sy + 1)))
+                    cand = Vox(px, py, part.start.z)
+                    if px + sx > gx or py + sy > gy or cand.z + sz > gz:
+                        continue
+                    trial = dict(placed)
+                    trial[part.id] = cand
+                    if layout_clashes(config, trial, {}, rc.min_clearance, pairwise_only=True):
+                        continue
+                    if layouts_cross_clash(config, targets, trial, rc.min_clearance):
+                        continue
+                    placed[part.id] = cand
+                    break
+                else:
+                    break
+            if len(placed) == len(order):
+                starts = placed
                 break
-            else:
-                raise RuntimeError(
-                    f"start sampling failed for {part.name} after {rc.max_tries} tries "
-                    f"(staging region too small?)")
-        starts = placed
+        else:
+            raise RuntimeError(
+                f"start sampling failed after {rc.max_tries} layout attempts "
+                f"(staging region too small?)")
 
     return starts, targets

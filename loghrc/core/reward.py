@@ -8,6 +8,8 @@ Precedence: env override > task reward > sparse default.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 
 
@@ -35,6 +37,17 @@ class RewardConfig:
     # Task-division bonus at completion (Phase 2 only)
     division_bonus: bool = False
     w_division: float = 20.0
+
+    def to_dict(self) -> dict:
+        return self.__dict__.copy()
+
+    def reward_hash(self) -> str:
+        """Short identity for grouping/filtering episodes by which reward
+        actually produced them (ablation arms are set via the env override,
+        which TaskConfig.version_hash cannot see — this covers that gap)."""
+
+        payload = json.dumps(self.__dict__, sort_keys=True)
+        return hashlib.sha1(payload.encode()).hexdigest()[:10]
 
     @staticmethod
     def sparse() -> "RewardConfig":

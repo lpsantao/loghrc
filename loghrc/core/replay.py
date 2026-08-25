@@ -13,6 +13,7 @@ from typing import Any, Iterator
 
 import numpy as np
 
+from loghrc.core.geometry import pos_along_path
 from loghrc.core.viz_labels import (
     LABEL_HUMAN,
     LABEL_ROBOT_GRIPPER,
@@ -21,27 +22,6 @@ from loghrc.core.viz_labels import (
     PartClass,
 )
 from loghrc.core.episode_log import read_episode
-
-
-def _pos_along_path(path: list[tuple[float, float, float]], progress: float) -> tuple[float, float, float]:
-    """Point at fractional arc-length ``progress`` along a polyline (mirrors env)."""
-
-    if len(path) == 1:
-        return path[0]
-    seg_lens = [
-        sum((b - a) ** 2 for a, b in zip(p, q)) ** 0.5
-        for p, q in zip(path[:-1], path[1:])
-    ]
-    total = sum(seg_lens)
-    if total <= 1e-9:
-        return path[-1]
-    d = max(0.0, min(1.0, progress)) * total
-    for (p, q), L in zip(zip(path[:-1], path[1:]), seg_lens):
-        if d <= L + 1e-9:
-            f = 1.0 if L <= 1e-9 else min(1.0, d / L)
-            return tuple(a + (b - a) * f for a, b in zip(p, q))
-        d -= L
-    return path[-1]
 
 
 @dataclass
@@ -127,7 +107,7 @@ class Replay:
                 if act is not None and act["dur"] > 0:
                     prog = min(1.0, (tick - act["start_t"]) / act["dur"])
                     path = [tuple(map(float, p)) for p in act["path"]]
-                    hands[agent] = _pos_along_path(path, prog)
+                    hands[agent] = pos_along_path(path, prog)
             yield ReplayState(tick=tick, parts=parts, joints_done=joints,
                               hands=hands.copy(), active=dict(active),
                               events_now=events_now)
@@ -156,7 +136,8 @@ class Replay:
 
     # ------------------------------------------------------------------
     def label_grid(self, state: ReplayState, show_targets: bool = True) -> np.ndarray:
-        """Mirror of env.label_grid() painted from replay state."""
+        """Lossy single-integer-per-voxel view painted from replay state, for
+        the offline viewer and the matplotlib gif/mp4 exporter."""
 
         grid = np.zeros(self.grid_size, dtype=np.uint8)
         if show_targets:

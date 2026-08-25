@@ -62,10 +62,17 @@ def allocation_mask(env: "LogHrcEnv", allocation: dict[str, int] | None,
     return mask
 
 
+def procedural_mask(env: "LogHrcEnv", agent: int = ROBOT) -> np.ndarray:
+    """Execution validity shared by mask, penalty, and none experiment arms."""
+
+    mask = graph_mask(env, env.graph)
+    mask &= allocation_mask(env, env.allocation, agent=agent)
+    return mask
+
+
 def compose(env: "LogHrcEnv") -> np.ndarray:
     mask = physics_mask(env)
-    mask &= graph_mask(env, env.graph)
-    mask &= allocation_mask(env, env.allocation)
+    mask &= procedural_mask(env)
     return mask
 
 
