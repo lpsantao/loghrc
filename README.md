@@ -76,8 +76,8 @@ All three scripts accept `--constraint-mode mask|penalty|none` and
 prints its episode-log path.
 
 Ready-made episode logs are kept in `examples/demo_episodes/`. Open
-`loghrc/viz/viewer/viewer.html` and drop any of those `.jsonl.gz` files onto the
-viewer; no simulation run is needed. New demo runs are written separately under
+`loghrc/viz/viewer/viewer.html`, then click the viewer or drop any of those
+`.jsonl.gz` files onto it; no simulation run is needed. New demo runs are written separately under
 `runs/`, so they do not overwrite these reference episodes.
 
 Or directly, with randomization and logging:
@@ -168,8 +168,8 @@ python -m loghrc.validate            # all registered tasks
 python -m loghrc.validate my_task
 ```
 
-Replay an episode: open `loghrc/viz/viewer/viewer.html` in a browser and drop in
-any `runs/**/episodes/ep_*.jsonl.gz`, or export a video:
+Replay an episode: open `loghrc/viz/viewer/viewer.html` in a browser, then click
+the viewer or drop in any `runs/**/episodes/ep_*.jsonl.gz`; or export a video:
 
 ```bash
 python -m loghrc.viz.rendering runs/my_run/episodes/ep_000000.jsonl.gz -o ep.gif

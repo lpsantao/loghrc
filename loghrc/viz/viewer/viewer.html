@@ -34,7 +34,10 @@
   h2 { font-size:12px; margin:14px 0 4px; color:var(--dim); text-transform:uppercase;
        letter-spacing:.05em; }
   #drop { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-          color:var(--dim); font-size:15px; text-align:center; pointer-events:none; }
+          color:var(--dim); font-size:15px; text-align:center; cursor:pointer;
+          border:2px dashed transparent; transition:.15s ease; }
+  #drop.drag-active { color:var(--text); background:#1b1e25dd; border-color:#6b7280; }
+  #loadError { color:#ff6b6b; margin-top:8px; white-space:pre-wrap; }
   button, select { background:#2a2e37; color:var(--text); border:1px solid #3a3f4a;
           border-radius:4px; padding:4px 10px; cursor:pointer; font-size:13px; }
   button:hover { background:#343947; }
@@ -57,10 +60,11 @@
 <div id="app">
   <div id="scene"><div id="drop">Drop an episode file here<br>
       (<code>ep_*.jsonl</code> or <code>ep_*.jsonl.gz</code>)<br><br>
-      or use the Open button →</div></div>
+      or click here to choose one</div></div>
   <div id="side">
     <h1>Episode Viewer</h1>
-    <div id="openwrap"><input type="file" id="file" accept=".jsonl,.gz"></div>
+    <div id="openwrap"><input type="file" id="file" accept=".jsonl,.jsonl.gz,.gz">
+      <div id="loadError" role="alert"></div></div>
     <h2>Episode</h2><div class="kv" id="meta"></div>
     <h2>Now</h2><div id="actions">—</div>
     <h2>Progress</h2><div class="kv" id="prog"></div>
@@ -121,6 +125,8 @@ function parseEpisode(buf, name) {
   const header = header_events.find(o => o.type === "header");
   const footer = header_events.find(o => o.type === "footer");
   const events = header_events.filter(o => o.type !== "header" && o.type !== "footer");
+  if (!header) throw new Error("The file has no episode header.");
+  if (!footer) throw new Error("The file has no episode footer.");
   return { header, events, footer };
 }
 
@@ -400,16 +406,38 @@ function loadEpisode(buf, name) {
   setFrame(0);
 }
 
-document.getElementById("file").addEventListener("change", async e => {
-  const f = e.target.files[0];
-  if (f) loadEpisode(await f.arrayBuffer(), f.name);
+async function openEpisodeFile(file) {
+  const error = document.getElementById("loadError");
+  error.textContent = "";
+  try {
+    if (!/\.jsonl(?:\.gz)?$/i.test(file.name))
+      throw new Error("Choose an episode ending in .jsonl or .jsonl.gz.");
+    loadEpisode(await file.arrayBuffer(), file.name);
+  } catch (err) {
+    error.textContent = `Could not open ${file.name}: ${err.message || err}`;
+    console.error(err);
+  }
+}
+
+const fileInput = document.getElementById("file");
+const dropEl = document.getElementById("drop");
+fileInput.addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (file) openEpisodeFile(file);
 });
-const sceneEl = document.getElementById("scene");
-sceneEl.addEventListener("dragover", e => e.preventDefault());
-sceneEl.addEventListener("drop", async e => {
+dropEl.addEventListener("click", () => fileInput.click());
+window.addEventListener("dragover", e => {
   e.preventDefault();
-  const f = e.dataTransfer.files[0];
-  if (f) loadEpisode(await f.arrayBuffer(), f.name);
+  dropEl.classList.add("drag-active");
+});
+window.addEventListener("dragleave", e => {
+  if (!e.relatedTarget) dropEl.classList.remove("drag-active");
+});
+window.addEventListener("drop", e => {
+  e.preventDefault();
+  dropEl.classList.remove("drag-active");
+  const file = e.dataTransfer.files[0];
+  if (file) openEpisodeFile(file);
 });
 document.getElementById("play").addEventListener("click", () => {
   playing = !playing;
