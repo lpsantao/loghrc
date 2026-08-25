@@ -1,8 +1,10 @@
 """Episode event logging: every episode, always (DESIGN.md §6).
 
 One gzipped JSONL file per episode (header line, event lines, footer line)
-plus a run-level ``index.csv`` for filtering. The web viewer and the replay
-engine both consume these files directly.
+plus, per ``RunLogger`` instance, an ``index_<uuid>.csv`` shard for
+filtering — see ``RunLogger`` for why it's sharded rather than one shared
+file. The web viewer and the replay engine both consume the episode files
+directly; ``read_index`` reads the index back.
 """
 
 from __future__ import annotations
@@ -10,16 +12,18 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
 import gymnasium as gym
 
 INDEX_FIELDS = [
-    "episode", "file", "config", "phase", "profile", "seed",
+    "episode", "file", "config", "task_hash", "experiment_hash", "phase",
+    "constraint_mode", "profile", "reward_hash", "seed",
     "success", "ticks", "reward",
-    "conflicts", "safety_violations", "invalid_robot_actions",
-    "human_idle_blocked", "human_idle_choice", "human_interruptions",
+    "conflicts", "safety_violations", "proximity_violations", "invalid_robot_actions",
+    "human_idle_blocked", "human_idle_choice", "human_blocked_attempts", "human_interruptions",
     "failed_actions", "joints_done", "parts_placed", "robot_tasks", "human_tasks",
 ]
 
@@ -55,33 +59,55 @@ def read_episode(path: str | Path) -> dict[str, Any]:
     return {"header": header, "events": events, "footer": footer}
 
 
+def read_index(run_dir: str | Path) -> list[dict[str, str]]:
+    """Read and concatenate every ``index_<uuid>.csv`` shard under a run
+    directory (one shard per ``RunLogger`` instance — see ``RunLogger``)."""
+
+    rows: list[dict[str, str]] = []
+    for path in sorted(Path(run_dir).glob("index_*.csv")):
+        with open(path, newline="") as fh:
+            rows.extend(csv.DictReader(fh))
+    return rows
+
+
 class RunLogger:
-    """Owns a run directory: episodes/ + index.csv."""
+    """Owns a run directory: episodes/ + one index_<uuid>.csv shard per
+    instance. Each ``RunLogger`` generates its own uuid and writes only to
+    its own shard and its own uuid-prefixed episode files, so multiple
+    ``RunLogger``s (e.g. one per parallel env worker) can share a run_dir
+    with no shared counter and no locking — filenames can't collide across
+    instances. Use ``read_index`` to read a run's full index back."""
 
     def __init__(self, run_dir: str | Path, compress: bool = True) -> None:
         self.run_dir = Path(run_dir)
         self.episodes_dir = self.run_dir / "episodes"
         self.episodes_dir.mkdir(parents=True, exist_ok=True)
-        self.index_path = self.run_dir / "index.csv"
+        self._worker_id = uuid.uuid4().hex[:8]
+        self.index_path = self.run_dir / f"index_{self._worker_id}.csv"
+        self.manifest_path = self.run_dir / f"manifest_{self._worker_id}.json"
         self.compress = compress
         self._n = 0
-        if not self.index_path.exists():
-            with open(self.index_path, "w", newline="") as fh:
-                csv.DictWriter(fh, fieldnames=INDEX_FIELDS).writeheader()
-        else:  # resume: continue numbering
-            with open(self.index_path) as fh:
-                self._n = max(0, sum(1 for _ in fh) - 1)
+        with open(self.index_path, "w", newline="") as fh:
+            csv.DictWriter(fh, fieldnames=INDEX_FIELDS).writeheader()
 
     def log(self, record: dict[str, Any], episode_reward: float | None = None) -> Path:
-        name = f"ep_{self._n:06d}.jsonl"
+        if self._n == 0:
+            with open(self.manifest_path, "w", encoding="utf-8") as fh:
+                json.dump(record["header"]["experiment"], fh, indent=2, sort_keys=True)
+                fh.write("\n")
+        name = f"ep_{self._worker_id}_{self._n:06d}.jsonl"
         path = write_episode(self.episodes_dir / name, record, compress=self.compress)
         metrics = record["footer"]["metrics"]
         row = {
             "episode": self._n,
             "file": str(path.relative_to(self.run_dir)),
             "config": record["header"]["config"],
+            "task_hash": record["header"]["task_hash"],
+            "experiment_hash": record["header"]["experiment_hash"],
             "phase": record["header"]["phase"],
+            "constraint_mode": record["header"]["constraint_mode"],
             "profile": record["header"]["profile"]["name"],
+            "reward_hash": record["header"]["reward_hash"],
             "seed": record["header"]["seed"],
             "reward": "" if episode_reward is None else round(episode_reward, 4),
             **{k: metrics[k] for k in INDEX_FIELDS if k in metrics},

@@ -7,9 +7,10 @@ the derived scores and run-level aggregation used in Ch.7.
 
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 from statistics import mean
+
+from loghrc.core.episode_log import read_index
 
 
 def fluency_score(m: dict) -> float:
@@ -24,22 +25,30 @@ def fluency_score(m: dict) -> float:
 
 
 def symbiosis_score(m: dict) -> float:
-    """(TSR x fluency) / (collision_rate + 1) — tracker §4, RQ4."""
+    """(TSR x fluency) / (proximity-violation rate + 1)."""
 
     tsr = 1.0 if m["success"] in (True, "True", 1, "1") else 0.0
     ticks = max(1, int(m["ticks"]))
-    collision_rate = int(m["safety_violations"]) / ticks
-    return (tsr * fluency_score(m)) / (collision_rate + 1.0)
+    proximity_rate = int(m.get("proximity_violations", m["safety_violations"])) / ticks
+    return (tsr * fluency_score(m)) / (proximity_rate + 1.0)
 
 
-def aggregate_index(index_csv: str | Path) -> dict[str, float]:
-    """Aggregate a run's index.csv into headline numbers."""
+def aggregate_index(run_dir: str | Path) -> dict[str, float]:
+    """Aggregate a run's index (every index_<uuid>.csv shard under
+    run_dir — see episode_log.read_index) into headline numbers."""
 
-    rows = list(csv.DictReader(open(index_csv)))
+    rows = read_index(run_dir)
     if not rows:
         return {}
     def as_int(r, k):
-        return int(float(r[k] or 0))
+        aliases = {
+            "proximity_violations": "safety_violations",
+            "human_blocked_attempts": "conflicts",
+        }
+        value = r.get(k)
+        if value in (None, "") and k in aliases:
+            value = r.get(aliases[k])
+        return int(float(value or 0))
     succ = [1.0 if r["success"] in ("True", "1") else 0.0 for r in rows]
     return {
         "episodes": len(rows),
@@ -47,7 +56,11 @@ def aggregate_index(index_csv: str | Path) -> dict[str, float]:
         "mean_ticks": mean(as_int(r, "ticks") for r in rows),
         "mean_conflicts": mean(as_int(r, "conflicts") for r in rows),
         "mean_safety_violations": mean(as_int(r, "safety_violations") for r in rows),
+        "mean_proximity_violations": mean(
+            as_int(r, "proximity_violations") for r in rows),
         "mean_human_idle_blocked": mean(as_int(r, "human_idle_blocked") for r in rows),
+        "mean_human_blocked_attempts": mean(
+            as_int(r, "human_blocked_attempts") for r in rows),
         "mean_interruptions": mean(as_int(r, "human_interruptions") for r in rows),
         "mean_invalid": mean(as_int(r, "invalid_robot_actions") for r in rows),
         "mean_fluency": mean(fluency_score(r) for r in rows),

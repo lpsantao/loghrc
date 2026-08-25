@@ -5,9 +5,10 @@ print metrics, and show how to replay it.
 """
 
 import argparse
+from dataclasses import replace
 
 from loghrc.tasks import full_table_config, two_leg_table_config
-from loghrc.configs import ROBOT
+from loghrc.configs import ROBOT, RandomizationConfig
 from loghrc.env import LogHrcEnv
 from loghrc.episode_log import EpisodeRecorder
 from loghrc.human import RIGID_ROBOT_PROFILE, PRESETS, HELD_OUT_PRESETS, ScriptedPolicy
@@ -19,13 +20,34 @@ def main() -> None:
     ap.add_argument("--profile", default="slow_methodical",
                     choices=sorted({**PRESETS, **HELD_OUT_PRESETS}))
     ap.add_argument("--phase", type=int, choices=[1, 2], default=1)
+    ap.add_argument("--constraint-mode", choices=["mask", "penalty", "none"],
+                    default="mask")
+    ap.add_argument("--randomization",
+                    choices=["task-default", "none", "starts", "goal", "both"],
+                    default="task-default")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--outdir", default="runs/scripted_demo")
     args = ap.parse_args()
 
     config = two_leg_table_config() if args.config == "two_leg" else full_table_config()
+    randomization = None
+    if args.randomization == "none":
+        randomization = False
+    elif args.randomization != "task-default":
+        base = config.randomization or RandomizationConfig(False, False)
+        randomization = replace(
+            base,
+            randomize_starts=args.randomization in ("starts", "both"),
+            randomize_goal=args.randomization in ("goal", "both"),
+        )
     env = EpisodeRecorder(
-        LogHrcEnv(config=config, phase=args.phase, human_profile=args.profile),
+        LogHrcEnv(
+            config=config,
+            phase=args.phase,
+            human_profile=args.profile,
+            constraint_mode=args.constraint_mode,
+            randomization=randomization,
+        ),
         args.outdir,
     )
     obs, info = env.reset(seed=args.seed)
@@ -41,6 +63,8 @@ def main() -> None:
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
 
+    print(f"task={args.config} phase={args.phase} profile={args.profile} "
+          f"constraint_mode={args.constraint_mode} randomization={args.randomization}")
     print("metrics:", info["episode_metrics"])
     print("episode log:", info["episode_log"])
     print("\nReplay it: open loghrc/viz/viewer/viewer.html and drop the file in,")

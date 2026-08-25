@@ -1,4 +1,4 @@
-"""Task-agnostic configuration schema (DESIGN v2 §core).
+"""Task-agnostic configuration schema.
 
 A task = geometry + entities + joints + goal + (optional) reward, allocation,
 randomization, graph semantics. The core engine consumes this schema and knows
@@ -7,11 +7,10 @@ nothing about furniture, blocks, or any concrete domain.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 
 from loghrc.core.labels import PartClass
+from loghrc.core.provenance import component_spec, fingerprint
 
 ROBOT = 0
 HUMAN = 1
@@ -59,7 +58,14 @@ class JointSpec:
 
 @dataclass(frozen=True)
 class Group:
-    """Sub-assembly grouping used for allocation and human preferences."""
+    """Sub-assembly grouping used for allocation and human preferences.
+
+    ``part_ids`` order is a pipeline contract, not just a listing: the
+    scripted policy (``humans.scripted.ScriptedPolicy._next_group_step``)
+    walks it front-to-back and stops at the first unplaced part, so it must
+    already be in physical/procedural dependency order (e.g. foot -> dowel ->
+    top). ``check_solvable`` is the safety net that catches a wrong order —
+    nothing validates it more cheaply than that."""
 
     name: str
     part_ids: tuple[int, ...]
@@ -103,6 +109,8 @@ class TaskConfig:
     phase1_allocation: dict[str, int] | None = None
     # Which profile pool "sample" draws from (see humans.pools.POOLS).
     default_profile_pool: str = "furniture"
+    # Optional phase-specific overrides for the sampled human population.
+    profile_pool_by_phase: dict[int, str] | None = None
     # Optional per-episode layout randomization (env can override/disable).
     randomization: RandomizationConfig | None = None
     # Pluggable task-graph semantics factory (constraints.graph.DefaultTaskGraph
@@ -123,30 +131,38 @@ class TaskConfig:
         object.__setattr__(self, "_joints_by_id", {j.id: j for j in self.joints})
         object.__setattr__(self, "_groups_by_name", {g.name: g for g in self.groups})
 
+    def fingerprint_payload(self) -> dict:
+        """Every declarative field that can change task or default MDP semantics."""
+
+        return {
+            "schema": 1,
+            "name": self.name,
+            "grid_size": self.grid_size,
+            "voxel_size_cm": self.voxel_size_cm,
+            "parts": component_spec(self.parts),
+            "joints": component_spec(self.joints),
+            "groups": component_spec(self.groups),
+            "home_robot": component_spec(self.home_robot),
+            "home_human": component_spec(self.home_human),
+            "max_ticks": self.max_ticks,
+            "robot_durations": self.robot_durations,
+            "human_durations": self.human_durations,
+            "goal": component_spec(self.goal) if self.goal is not None else {"default": "AllTargets"},
+            "reward": component_spec(self.reward) if self.reward is not None else {"default": "sparse"},
+            "phase1_allocation": self.phase1_allocation,
+            "default_profile_pool": self.default_profile_pool,
+            "profile_pool_by_phase": self.profile_pool_by_phase,
+            "randomization": component_spec(self.randomization),
+            "graph_factory": (
+                component_spec(self.graph_factory)
+                if self.graph_factory is not None else {"default": "DefaultTaskGraph"}
+            ),
+        }
+
+    def task_hash(self) -> str:
+        return fingerprint(self.fingerprint_payload())
+
     def version_hash(self) -> str:
-        payload = json.dumps(
-            {
-                "name": self.name,
-                "grid": self.grid_size,
-                "parts": [
-                    (p.id, p.name, int(p.cls), p.size, p.start.as_tuple(), p.target.as_tuple(),
-                     p.support, p.proc_prereq_joints)
-                    for p in self.parts
-                ],
-                "joints": [(j.id, j.name, j.parts, j.prereq_joints) for j in self.joints],
-                "robot_durations": sorted(self.robot_durations.items()),
-                "human_durations": sorted(self.human_durations.items()),
-                "max_ticks": self.max_ticks,
-                "phase1_allocation": sorted((self.phase1_allocation or {}).items()),
-                "randomization": (
-                    None if self.randomization is None else [
-                        self.randomization.randomize_starts,
-                        self.randomization.randomize_goal,
-                        self.randomization.staging_region,
-                        self.randomization.min_clearance,
-                    ]
-                ),
-            },
-            sort_keys=True,
-        )
-        return hashlib.sha1(payload.encode()).hexdigest()[:10]
+        """Backward-compatible alias for logs created before task_hash existed."""
+
+        return self.task_hash()
