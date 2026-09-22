@@ -58,7 +58,6 @@ class ActiveAction:
     total: int
     remaining: int
     path: list[tuple[float, float, float]]  # polyline waypoints (over-the-top routing)
-    safety_flagged: bool = False
 
     def position(self, progress: float) -> tuple[float, float, float]:
         return pos_along_path(self.path, progress)
@@ -79,7 +78,10 @@ class _Counters:
     human_idle_blocked: int = 0
     human_idle_choice: int = 0
     human_blocked_attempts: int = 0
-    human_interruptions: int = 0
+    human_interruptions: int = 0  # operations remain non-interruptible
+    human_waiting_initiative: int = 0
+    human_idle_scope_complete: int = 0
+    human_idle_spatial: int = 0
     failed_actions: int = 0
     robot_tasks: int = 0   # successful place_target/attach by the robot
     human_tasks: int = 0   # ... by the human (division metric, CASE Phase 2)
@@ -96,7 +98,7 @@ class LogHrcEnv(gym.Env):
         phase: int = 1,
         human_profile: "str | object" = "sample",
         held_out_profiles: bool = False,
-        profile_pool: str | None = None,
+        profile_pool: str | dict | None = None,
         human_model: "object | None" = None,
         randomization: RandomizationConfig | bool | None = None,
         graph: "object | str | None" = "default",    # None = free sim (physics-only mask)
@@ -143,7 +145,8 @@ class LogHrcEnv(gym.Env):
             phase, self.config.default_profile_pool)
         self._human_model = human_model
         from loghrc.humans.pools import POOLS
-        if self._profile_arg == "sample" and self._profile_pool not in POOLS:
+        if (self._profile_arg == "sample" and isinstance(self._profile_pool, str)
+                and self._profile_pool not in POOLS):
             raise ValueError(f"unknown human profile pool {self._profile_pool!r}")
         if self._human_model is not None:
             for method in ("reset", "decide", "on_task_completed"):
@@ -186,8 +189,13 @@ class LogHrcEnv(gym.Env):
 
         x, y, z = self.config.grid_size
         self.layout = ChannelLayout(self.config)
-        self.observation_space = spaces.Box(
+        voxel_space = spaces.Box(
             0, 1, shape=(self.layout.num_channels, x, y, z), dtype=np.uint8)
+        self.observation_space = (
+            spaces.Dict({"voxels": voxel_space,
+                         "joints": spaces.Box(0, 1, shape=(len(self.layout.joint_ids),), dtype=np.uint8)})
+            if self.config.observation_mode == "voxels-joints" else voxel_space
+        )
 
         self._part_joints: dict[int, list[int]] = {p.id: [] for p in self.config.parts}
         for j in self.config.joints:
@@ -214,6 +222,8 @@ class LogHrcEnv(gym.Env):
         self._episode_over = False
         self._last_decision_t = 0
         self.counters = _Counters()
+        self._proximity_active = False
+        self._human_wait_reason = None
         self.events: list[dict[str, Any]] = []
         self._window: list[dict[str, Any]] = []
 
@@ -236,14 +246,17 @@ class LogHrcEnv(gym.Env):
         from loghrc.humans.pools import POOLS, sample_profile
         from loghrc.humans.scripted import HumanProfile, ScriptedPolicy
 
-        if isinstance(self._profile_arg, HumanProfile):
-            self.human_profile = self._profile_arg
-        elif self._profile_arg == "sample":
+        profile_arg = (options or {}).get("human_profile", self._profile_arg)
+        if isinstance(profile_arg, HumanProfile):
+            self.human_profile = profile_arg
+        elif profile_arg == "sample":
             self.human_profile = sample_profile(self.np_random, held_out=self._held_out,
                                                 pool=self._profile_pool)
         else:
             merged = {name: p for presets in POOLS.values() for name, p in presets.items()}
-            self.human_profile = merged[self._profile_arg]
+            if isinstance(self._profile_pool, dict):
+                merged.update(self._profile_pool)
+            self.human_profile = merged[profile_arg]
         if self._human_model is not None:
             self.human_policy = self._human_model
         else:
@@ -261,11 +274,7 @@ class LogHrcEnv(gym.Env):
             raise ValueError(f"action {action} outside {self.action_space}")
         verb, arg = self._actions[action]
         self._window = []
-        from loghrc.constraints.masking import procedural_mask
-        if not procedural_mask(self)[action]:
-            valid, message = False, "blocked by task graph or allocation"
-        else:
-            valid, message = self._start_action(ROBOT, verb, arg)
+        valid, message = self._start_action(ROBOT, verb, arg)
         if not valid:
             self.counters.invalid_robot += 1
             self._log_event({"type": "invalid", "agent": ROBOT, "verb": verb, "arg": arg,
@@ -305,6 +314,9 @@ class LogHrcEnv(gym.Env):
         human = self.agents[HUMAN]
         if human.action is None and not self.is_complete():
             verb, arg, reason = self.human_policy.decide(self, self.np_random)
+            if reason != self._human_wait_reason:
+                self._log_event({"type": "human_decision_reason", "reason": reason})
+                self._human_wait_reason = reason
             if reason == "act":
                 ok, msg = self._start_action(HUMAN, verb, arg)
                 if not ok:
@@ -314,10 +326,16 @@ class LogHrcEnv(gym.Env):
                                      "arg": arg, "message": msg})
                     self._window.append({"type": "conflict"})
                     self.counters.human_idle_blocked += 1
-            elif reason == "blocked":
+            elif reason in ("blocked", "spatial_blocked"):
                 self.counters.human_idle_blocked += 1
+                if reason == "spatial_blocked":
+                    self.counters.human_idle_spatial += 1
                 self._window.append({"type": "human_blocked"})
-            else:  # pause / hesitate -> deliberate wait
+            else:  # deliberate wait, distinguished from dependency/space blocking
+                if reason == "waiting_initiative":
+                    self.counters.human_waiting_initiative += 1
+                elif reason == "scope_complete":
+                    self.counters.human_idle_scope_complete += 1
                 ticks = self.human_profile.pause_ticks if reason == "pause" else 1
                 self.counters.human_idle_choice += max(ticks, 1)
                 self._begin(HUMAN, "wait", None, max(ticks, 1), human.hand)
@@ -356,6 +374,13 @@ class LogHrcEnv(gym.Env):
     # Action lifecycle
     # ------------------------------------------------------------------
     def _start_action(self, agent: int, verb: str, arg: int | None) -> tuple[bool, str]:
+        from loghrc.constraints.masking import procedural_mask
+        try:
+            index = self._actions.index((verb, arg))
+        except ValueError:
+            return False, f"unknown action {(verb, arg)}"
+        if not procedural_mask(self, agent=agent)[index]:
+            return False, "blocked by task graph or allocation"
         state = self.agents[agent]
         if verb == "wait":
             self._begin(agent, verb, None, self._duration(agent, "wait"), state.hand)
@@ -388,14 +413,8 @@ class LogHrcEnv(gym.Env):
             ok, msg = physics.can_attach(self, agent, joint)
             if not ok:
                 return False, msg
-            specs = [self.config.part(pid) for pid in joint.parts]
-            poses = [self.parts[pid].pose for pid in joint.parts]
-            mx = sum(p.x for p in poses) / 2
-            my = sum(p.y for p in poses) / 2
-            mz = min(self.config.grid_size[2] - 1,
-                     max(p.z + s.size[2] for p, s in zip(poses, specs)) + 1)
             self._begin(agent, verb, arg, self._duration(agent, "attach"),
-                        (mx, my, float(mz)))
+                        physics.attach_destination(self, joint))
             return True, "ok"
         return False, f"unknown verb {verb}"
 
@@ -492,18 +511,14 @@ class LogHrcEnv(gym.Env):
 
     def _check_safety(self) -> None:
         r, h = self.agents[ROBOT], self.agents[HUMAN]
-        act = r.action
-        if act is None or act.verb in ("wait", "invalid"):
-            return
-        if act.safety_flagged:
-            return
         dist = max(abs(a - b) for a, b in zip(r.hand, h.hand))
-        if dist <= 1.5:
-            act.safety_flagged = True
+        close = dist <= 1.5
+        if close and not self._proximity_active:
             self.counters.safety_violations += 1
             self._log_event({"type": "safety", "robot_hand": [round(v, 2) for v in r.hand],
                              "human_hand": [round(v, 2) for v in h.hand]})
             self._window.append({"type": "safety"})
+        self._proximity_active = close
 
     # ------------------------------------------------------------------
     # World queries
@@ -553,8 +568,13 @@ class LogHrcEnv(gym.Env):
     # ------------------------------------------------------------------
     # Observation (labelled voxel grid, DESIGN.md §2.10)
     # ------------------------------------------------------------------
-    def _observation(self) -> np.ndarray:
-        return build_observation(self, self.layout)
+    def _observation(self) -> np.ndarray | dict[str, np.ndarray]:
+        voxels = build_observation(self, self.layout)
+        if self.config.observation_mode == "voxels":
+            return voxels
+        return {"voxels": voxels,
+                "joints": np.asarray([self.joints_done[jid] for jid in self.layout.joint_ids],
+                                     dtype=np.uint8)}
 
     def clip_pose(self, pos, size) -> tuple[int, int, int]:
         gx, gy, gz = self.config.grid_size
@@ -598,6 +618,7 @@ class LogHrcEnv(gym.Env):
             "action_mask": self.action_masks(),
             "progress": self.progress(),
             "profile": self.human_profile.name,
+            "profile_family": self.human_profile.family,
             "constraint_mode": self.constraint_mode,
         }
 
@@ -614,6 +635,9 @@ class LogHrcEnv(gym.Env):
             "human_idle_choice": c.human_idle_choice,
             "human_blocked_attempts": c.human_blocked_attempts,
             "human_interruptions": c.human_interruptions,
+            "human_waiting_initiative": c.human_waiting_initiative,
+            "human_idle_scope_complete": c.human_idle_scope_complete,
+            "human_idle_spatial": c.human_idle_spatial,
             "failed_actions": c.failed_actions,
             "joints_done": sum(self.joints_done.values()),
             "parts_placed": sum(st.at_target for st in self.parts.values()),
@@ -682,6 +706,8 @@ class LogHrcEnv(gym.Env):
 
         identity = {
             "schema": 1,
+            "interaction_semantics": "journal-v2",
+            "proximity_semantics": "contiguous-hand-proximity-events",
             "task_hash": self.config.task_hash(),
             "task": self.config.name,
             "phase": self.phase,
@@ -693,12 +719,17 @@ class LogHrcEnv(gym.Env):
             "invalid_action_penalty": self.invalid_action_penalty,
             "allocation": component_spec(self.allocation),
             "human_profile_argument": component_spec(self._profile_arg),
-            "human_profile_pool": self._profile_pool,
+            "human_profile_pool": component_spec(self._profile_pool),
             "held_out_profiles": self._held_out,
             "human_model": component_spec(self._human_model),
             "randomization": component_spec(self.randomization),
             "show_targets": self.show_targets,
             "observation_channels": self.layout.names,
+            "observation": {
+                "schema": "voxels-joints-v1" if self.config.observation_mode == "voxels-joints" else "voxels-v1",
+                "joint_ids": list(self.layout.joint_ids) if self.config.observation_mode == "voxels-joints" else [],
+                "joint_semantics": "completed attachment; 0/1 in task configuration order",
+            },
             "action_table": self._actions,
         }
         return {

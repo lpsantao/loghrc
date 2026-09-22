@@ -121,6 +121,12 @@ class TaskConfig:
     # if unset when a graph is requested).
     graph_factory: "object | None" = None
 
+    # Endpoint hand clearance and work-destination reservation, in voxels.
+    # Zero retains legacy behavior; this is not swept-volume collision physics.
+    workspace_clearance: float = 0.0
+    # Optional factual task state alongside the unchanged voxel tensor.
+    observation_mode: str = "voxels"  # voxels | voxels-joints
+
     def part(self, part_id: int) -> PartSpec:
         return self._parts_by_id[part_id]
 
@@ -131,6 +137,11 @@ class TaskConfig:
         return self._groups_by_name[name]
 
     def __post_init__(self) -> None:
+        import math
+        if self.observation_mode not in ("voxels", "voxels-joints"):
+            raise ValueError("observation_mode must be voxels or voxels-joints")
+        if not math.isfinite(self.workspace_clearance) or self.workspace_clearance < 0:
+            raise ValueError("workspace_clearance must be finite and non-negative")
         object.__setattr__(self, "_parts_by_id", {p.id: p for p in self.parts})
         object.__setattr__(self, "_joints_by_id", {j.id: j for j in self.joints})
         object.__setattr__(self, "_groups_by_name", {g.name: g for g in self.groups})
@@ -149,6 +160,8 @@ class TaskConfig:
             "home_robot": component_spec(self.home_robot),
             "home_human": component_spec(self.home_human),
             "max_ticks": self.max_ticks,
+            "workspace_clearance": self.workspace_clearance,
+            "observation_mode": self.observation_mode,
             "robot_durations": self.robot_durations,
             "human_durations": self.human_durations,
             "goal": component_spec(self.goal) if self.goal is not None else {"default": "AllTargets"},

@@ -55,7 +55,7 @@ def allocation_mask(env: "LogHrcEnv", allocation: dict[str, int] | None,
     if allocation is None:
         return mask
     for idx, (verb, arg) in enumerate(env.action_table):
-        if verb == "pick":
+        if verb in ("pick", "place_target", "place_staging"):
             mask[idx] = part_agent(env.config, allocation, arg) == agent
         elif verb == "attach":
             mask[idx] = joint_agent(env.config, allocation, arg) == agent

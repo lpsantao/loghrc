@@ -38,6 +38,8 @@ class ChannelLayout:
         self.human = 2 * n + 1
         self.assembled = 2 * n + 2
         self.num_channels = 2 * n + 3
+        # Configuration order matches attach actions, even for non-contiguous IDs.
+        self.joint_ids = tuple(j.id for j in config.joints)
         self.names = ([part_class_name(c) for c in self.classes]
                       + [f"TARGET_{part_class_name(c)}" for c in self.classes]
                       + ["ROBOT_GRIPPER", "HUMAN", "ASSEMBLED"])
