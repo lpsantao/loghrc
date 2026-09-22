@@ -24,6 +24,7 @@ INDEX_FIELDS = [
     "success", "ticks", "reward",
     "conflicts", "safety_violations", "proximity_violations", "invalid_robot_actions",
     "human_idle_blocked", "human_idle_choice", "human_blocked_attempts", "human_interruptions",
+    "human_waiting_initiative", "human_idle_scope_complete", "human_idle_spatial",
     "failed_actions", "joints_done", "parts_placed", "robot_tasks", "human_tasks",
 ]
 
