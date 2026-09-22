@@ -37,6 +37,11 @@ class HumanProfile:
     patience: int | None = None   # max consecutive blocked ticks before disengaging
     engagement: float = 1.0       # prob. of staying engaged after completing a task
 
+    # Generic collaboration semantics; scopes are behavioral, not capabilities.
+    group_scope: tuple[str, ...] | None = None
+    wait_for_robot: bool = False  # release after first successful robot placement/attach
+    family: str = "legacy"
+
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
         if isinstance(d["group_order"], tuple):
@@ -78,6 +83,10 @@ class ScriptedPolicy(HumanModel):
         else:
             explicit = [n for n in pref if n in names]
             self._order = explicit + [n for n in names if n not in explicit]
+        if self.profile.group_scope is not None:
+            unknown = set(self.profile.group_scope) - set(names)
+            if unknown:
+                raise ValueError(f"unknown profile groups: {sorted(unknown)}")
         self.engaged = True
         self._blocked_streak = 0
 
@@ -93,9 +102,11 @@ class ScriptedPolicy(HumanModel):
         held = env.agents[self.agent].held_part_id
         if held is not None:
             part = env.config.part(held)
-            ok, _ = physics.can_place_target(env, self.agent, part)
+            ok, message = physics.can_place_target(env, self.agent, part)
             if ok and self._graph.allows_place_target(env, part):
                 return "place_target", held, "act"
+            if message == "workspace occupied by other agent":
+                return "wait", None, "spatial_blocked"
             ok_s, _ = physics.can_place_staging(env, self.agent, part)
             if ok_s:
                 return "place_staging", held, "act"
@@ -105,6 +116,12 @@ class ScriptedPolicy(HumanModel):
             if not self._at_home(env):
                 return "move_home", None, "act"
             return "wait", None, "disengaged"
+
+        # Phase 1 always follows its fixed allocation, regardless of profile scope.
+        if env.allocation is None and self.profile.wait_for_robot and env.counters.robot_tasks == 0:
+            if not self._at_home(env):
+                return "move_home", None, "act"
+            return "wait", None, "waiting_initiative"
 
         task = self._next_task(env)
         if task is None:
@@ -116,7 +133,9 @@ class ScriptedPolicy(HumanModel):
             # that stationary hand (DESIGN.md §3: hands stay outside parts).
             if not self._at_home(env):
                 return "move_home", None, "act"
-            return "wait", None, "blocked"
+            if self._fully_done(env):
+                return "wait", None, "scope_complete"
+            return "wait", None, "spatial_blocked" if self._spatially_blocked else "blocked"
         self._blocked_streak = 0
         # Safety-margin hesitation: hold off while the robot hand is too close.
         if self.profile.safety_margin > 0:
@@ -158,10 +177,14 @@ class ScriptedPolicy(HumanModel):
             g = env.config.group(name)
             if env.allocation is not None and env.allocation.get(name) != self.agent:
                 continue
+            if (env.allocation is None and self.profile.group_scope is not None
+                    and name not in self.profile.group_scope):
+                continue
             groups.append(g)
         return groups
 
     def _next_task(self, env: "LogHrcEnv") -> tuple[str, int] | None:
+        self._spatially_blocked = False
         for g in self._my_groups(env):
             step = self._next_group_step(env, g)
             if step is not None:
@@ -176,7 +199,8 @@ class ScriptedPolicy(HumanModel):
                 continue
             part = env.config.part(pid)
             if self._graph.pick_useful(env, part):
-                ok, _ = physics.can_pick(env, self.agent, part)
+                ok, message = physics.can_pick(env, self.agent, part)
+                self._spatially_blocked |= message == "workspace occupied by other agent"
                 if ok:
                     return "pick", pid
             return None  # group blocked at this part (support/prereq/held elsewhere)
@@ -187,7 +211,8 @@ class ScriptedPolicy(HumanModel):
             joint = env.config.joint(jid)
             if not self._graph.allows_attach(env, joint):
                 return None
-            ok, _ = physics.can_attach(env, self.agent, joint)
+            ok, message = physics.can_attach(env, self.agent, joint)
+            self._spatially_blocked |= message == "workspace occupied by other agent"
             if ok:
                 return "attach", jid
             return None

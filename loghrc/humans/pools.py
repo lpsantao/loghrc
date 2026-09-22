@@ -22,13 +22,17 @@ POOLS: dict[str, dict[str, HumanProfile]] = {
 
 
 def sample_profile(rng: np.random.Generator, held_out: bool = False,
-                   pool: str = "furniture") -> HumanProfile:
+                   pool: str | dict[str, HumanProfile] = "furniture") -> HumanProfile:
     """Sample a preset and jitter its continuous parameters (mixed population)."""
 
     if held_out and pool == "furniture":
         pool = "furniture_heldout"
-    presets = POOLS[pool]
-    base = presets[rng.choice(sorted(presets))]
+    presets = POOLS[pool] if isinstance(pool, str) else pool
+    # Equal weight per behavior family; A/B are variants of the same family.
+    families = sorted({p.family for p in presets.values()})
+    family = families[0] if len(families) == 1 else rng.choice(families)
+    names = sorted(name for name, p in presets.items() if p.family == family)
+    base = presets[rng.choice(names)]
     return replace(
         base,
         speed=float(np.clip(base.speed * rng.uniform(0.9, 1.1), 0.5, 2.0)),
