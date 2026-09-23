@@ -185,7 +185,9 @@ function buildFrames(ep) {
     for (const a of [ROBOT, HUMAN]) {
       const act = active[a];
       if (act && act.dur > 0) {
-        const prog = Math.min(1, (t - act.start_t) / act.dur);
+        // Human actions advance in their logged start tick; robot actions do not.
+        const elapsed = t - act.start_t + (a === HUMAN ? 1 : 0);
+        const prog = Math.min(1, elapsed / act.dur);
         hands[a] = posAlongPath(act.path, prog);
       }
     }
@@ -361,7 +363,8 @@ function drawTimeline() {
     if (e.type === "action_start") {
       const y = lanes[e.agent];
       ctx.fillStyle = VERB_COLORS[e.verb] || "#555";
-      ctx.fillRect(x(e.t), y, Math.max(2, x(e.t + e.dur) - x(e.t) - 0.5), 14);
+      const start = e.t - (e.agent === HUMAN ? 1 : 0);
+      ctx.fillRect(x(start), y, Math.max(2, x(start + e.dur) - x(start) - 0.5), 14);
     } else if (["invalid","conflict","safety"].includes(e.type)) {
       ctx.fillStyle = "#ff4444";
       ctx.beginPath();

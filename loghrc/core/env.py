@@ -29,6 +29,7 @@ from loghrc.core.config import (
 )
 from loghrc.core.geometry import boxes_overlap, pos_along_path
 from loghrc.core.goal import default_goal
+from loghrc.core.proximity import encounters, position
 from loghrc.core.labels import part_class_manifest, part_class_name
 from loghrc.core.observation import ChannelLayout, build_observation
 from loghrc.core.provenance import component_spec, fingerprint, runtime_manifest, source_manifest
@@ -223,6 +224,7 @@ class LogHrcEnv(gym.Env):
         self._last_decision_t = 0
         self.counters = _Counters()
         self._proximity_active = False
+        self._proximity_duration = 0.0
         self._human_wait_reason = None
         self.events: list[dict[str, Any]] = []
         self._window: list[dict[str, Any]] = []
@@ -510,15 +512,31 @@ class LogHrcEnv(gym.Env):
                          "ok": ok, **payload})
 
     def _check_safety(self) -> None:
-        r, h = self.agents[ROBOT], self.agents[HUMAN]
-        dist = max(abs(a - b) for a, b in zip(r.hand, h.hand))
-        close = dist <= 1.5
-        if close and not self._proximity_active:
-            self.counters.safety_violations += 1
-            self._log_event({"type": "safety", "robot_hand": [round(v, 2) for v in r.hand],
-                             "human_hand": [round(v, 2) for v in h.hand]})
-            self._window.append({"type": "safety"})
-        self._proximity_active = close
+        # Actions have advanced once but are not yet cleared by _finish().
+        actions = []
+        for agent in (ROBOT, HUMAN):
+            act = self.agents[agent].action
+            actions.append(None if act is None else {
+                "path": act.path, "total": act.total, "remaining": act.remaining,
+            })
+        frame = {"t": self.t, "hands": [self.agents[a].hand for a in (ROBOT, HUMAN)],
+                 "actions": actions}
+        intervals = encounters(frame)
+        for start, end in intervals:
+            self._proximity_duration += end - start
+            continues = self._proximity_active and abs(start - (self.t - 1)) <= 1e-9
+            if not continues:
+                self.counters.safety_violations += 1
+                fraction = start - (self.t - 1)
+                self._log_event({
+                    "type": "safety", "encounter_start": start,
+                    "robot_hand": list(position(frame, ROBOT, fraction)),
+                    "human_hand": list(position(frame, HUMAN, fraction)),
+                })
+                self._window.append({"type": "safety"})
+            # Only the first interval can continue an encounter from last tick.
+            self._proximity_active = False
+        self._proximity_active = bool(intervals and abs(intervals[-1][1] - self.t) <= 1e-9)
 
     # ------------------------------------------------------------------
     # World queries
@@ -630,6 +648,7 @@ class LogHrcEnv(gym.Env):
             "conflicts": c.conflicts,
             "safety_violations": c.safety_violations,
             "proximity_violations": c.safety_violations,
+            "proximity_duration_ticks": self._proximity_duration,
             "invalid_robot_actions": c.invalid_robot,
             "human_idle_blocked": c.human_idle_blocked,
             "human_idle_choice": c.human_idle_choice,
@@ -707,7 +726,8 @@ class LogHrcEnv(gym.Env):
         identity = {
             "schema": 1,
             "interaction_semantics": "journal-v2",
-            "proximity_semantics": "contiguous-hand-proximity-events",
+            "proximity_semantics": "continuous-hand-chebyshev-events-v1",
+            "proximity_threshold_voxels": 1.5,
             "task_hash": self.config.task_hash(),
             "task": self.config.name,
             "phase": self.phase,

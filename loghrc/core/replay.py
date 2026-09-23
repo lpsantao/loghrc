@@ -132,7 +132,10 @@ class Replay:
             # interpolate hands along the routed polyline for in-flight actions
             for agent, act in active.items():
                 if act is not None and act["dur"] > 0:
-                    prog = min(1.0, (tick - act["start_t"]) / act["dur"])
+                    # Human actions start inside a tick and advance immediately;
+                    # robot actions start between ticks. Reproduce that first increment.
+                    elapsed = tick - act["start_t"] + (1 if agent == 1 else 0)
+                    prog = min(1.0, elapsed / act["dur"])
                     path = [tuple(map(float, p)) for p in act["path"]]
                     hands[agent] = pos_along_path(path, prog)
             yield ReplayState(tick=tick, parts=parts, joints_done=joints,
