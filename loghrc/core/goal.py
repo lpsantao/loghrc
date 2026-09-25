@@ -27,7 +27,7 @@ class AllTargets:
     def satisfied(self, env: "LogHrcEnv") -> bool:
         parts = self.part_ids if self.part_ids is not None else tuple(env.parts)
         joints = self.joint_ids if self.joint_ids is not None else tuple(env.joints_done)
-        return (all(env.parts[pid].at_target for pid in parts)
+        return (all(env.role_filled(pid) for pid in parts)
                 and all(env.joints_done[jid] for jid in joints))
 
     def describe(self) -> str:
@@ -42,7 +42,7 @@ class JointsAndAnchor:
     def satisfied(self, env: "LogHrcEnv") -> bool:
         joints = self.joint_ids if self.joint_ids is not None else tuple(env.joints_done)
         return (all(env.joints_done[jid] for jid in joints)
-                and env.parts[self.anchor_part_id].at_target)
+                and env.role_filled(self.anchor_part_id))
 
     def describe(self) -> str:
         return f"all joints fastened and part {self.anchor_part_id} at target"

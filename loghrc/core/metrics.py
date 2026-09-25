@@ -29,7 +29,7 @@ def symbiosis_score(m: dict) -> float:
 
     tsr = 1.0 if m["success"] in (True, "True", 1, "1") else 0.0
     ticks = max(1, int(m["ticks"]))
-    proximity_rate = int(m.get("proximity_violations", m["safety_violations"])) / ticks
+    proximity_rate = int((m["proximity_violations"] if "proximity_violations" in m else m["safety_violations"])) / ticks
     return (tsr * fluency_score(m)) / (proximity_rate + 1.0)
 
 

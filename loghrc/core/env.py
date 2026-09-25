@@ -50,6 +50,7 @@ class PartState:
     held_by: int | None = None
     reserved_by: int | None = None
     attached: bool = False    # True once any joint involving the part is done
+    target_role: int | None = None
 
 
 @dataclass
@@ -283,7 +284,8 @@ class LogHrcEnv(gym.Env):
                              "message": message})
             self._begin(ROBOT, "invalid", None, 1, self.agents[ROBOT].hand)
 
-        while self.agents[ROBOT].action is not None and not self._episode_over:
+        while (self.agents[ROBOT].action is not None
+               and self.t < self.config.max_ticks and not self._episode_over):
             self._tick()
 
         terminated = self.is_complete()
@@ -339,8 +341,11 @@ class LogHrcEnv(gym.Env):
                 elif reason == "scope_complete":
                     self.counters.human_idle_scope_complete += 1
                 ticks = self.human_profile.pause_ticks if reason == "pause" else 1
-                self.counters.human_idle_choice += max(ticks, 1)
                 self._begin(HUMAN, "wait", None, max(ticks, 1), human.hand)
+
+        # Count elapsed idle time, including partial pauses at episode end.
+        if human.action is not None and human.action.verb == "wait":
+            self.counters.human_idle_choice += 1
 
         for agent_id in (ROBOT, HUMAN):
             act = self.agents[agent_id].action
@@ -368,6 +373,21 @@ class LogHrcEnv(gym.Env):
     # ------------------------------------------------------------------
     def target_of(self, part_id: int) -> Vox:
         return self.episode_targets[part_id]
+
+    def compatible_roles(self, physical_id: int) -> tuple[int, ...]:
+        for group in self.config.interchangeable_groups:
+            if physical_id in group:
+                return group
+        return (physical_id,)
+
+    def role_part_id(self, role_id: int) -> int | None:
+        for pid, state in self.parts.items():
+            if state.at_target and (state.target_role if state.target_role is not None else pid) == role_id:
+                return pid
+        return None
+
+    def role_filled(self, role_id: int) -> bool:
+        return self.role_part_id(role_id) is not None
 
     def start_of(self, part_id: int) -> Vox:
         return self.episode_starts[part_id]
@@ -472,13 +492,17 @@ class LogHrcEnv(gym.Env):
             st.held_by = agent
             st.pose = None
             st.at_target = False
+            st.target_role = None
             self.agents[agent].held_part_id = act.arg
             payload["held"] = act.arg
         elif act.verb in ("place_target", "place_staging"):
             part = self.config.part(act.arg)
             dest = self.target_of(act.arg) if act.verb == "place_target" else self.start_of(act.arg)
-            st = self.parts[act.arg]
-            if not self.region_free(dest, part.size, ignore_part_id=act.arg):
+            physical_id = self.agents[agent].held_part_id if act.verb == "place_target" else act.arg
+            st = self.parts[physical_id]
+            valid = (physics.can_place_target(self, agent, part)[0] if act.verb == "place_target"
+                     else self.region_free(dest, part.size, ignore_part_id=physical_id))
+            if not valid:
                 ok = False
                 self.counters.failed_actions += 1
             else:
@@ -486,6 +510,9 @@ class LogHrcEnv(gym.Env):
                 st.held_by = None
                 st.reserved_by = None
                 st.at_target = act.verb == "place_target"
+                st.target_role = act.arg if st.at_target else None
+                payload["physical_part"] = physical_id
+                payload["target_role"] = st.target_role
                 self.agents[agent].held_part_id = None
                 payload["pose"] = list(dest.as_tuple())
                 if st.at_target:
@@ -501,8 +528,8 @@ class LogHrcEnv(gym.Env):
                 self.counters.failed_actions += 1
             else:
                 self.joints_done[act.arg] = True
-                for pid in joint.parts:
-                    self.parts[pid].attached = True
+                for role in joint.parts:
+                    self.parts[self.role_part_id(role)].attached = True
                 payload["joint_done"] = True
                 self._window.append({"type": "joint", "agent": agent, "joint": act.arg})
                 self._task_completed(agent)
@@ -689,6 +716,8 @@ class LogHrcEnv(gym.Env):
                 "seed": self._seed_used,
                 "episode_id": self.episode_id,
                 "profile": self.human_profile.to_dict(),
+                "assembly_semantics": "interchangeable-roles-v1" if self.config.interchangeable_groups else "fixed-parts-v1",
+                "interchangeable_groups": self.config.interchangeable_groups,
                 "part_classes": part_class_manifest(p.cls for p in self.config.parts),
                 "parts": [
                     {"id": p.id, "name": p.name, "cls": part_class_name(p.cls),
@@ -712,6 +741,7 @@ class LogHrcEnv(gym.Env):
                     for pid, st in self.parts.items()
                 },
                 "joints_done": {str(j): bool(v) for j, v in self.joints_done.items()},
+                "role_occupants": {str(p.id): self.role_part_id(p.id) for p in self.config.parts},
             },
         }
 
@@ -726,6 +756,8 @@ class LogHrcEnv(gym.Env):
         identity = {
             "schema": 1,
             "interaction_semantics": "journal-v2",
+            "assembly_semantics": "interchangeable-roles-v1" if self.config.interchangeable_groups else "fixed-parts-v1",
+            "action_argument_semantics": {"pick": "physical piece", "place_staging": "physical piece", "place_target": "assembly role", "attach": "joint between roles"},
             "proximity_semantics": "continuous-hand-chebyshev-events-v1",
             "proximity_threshold_voxels": 1.5,
             "task_hash": self.config.task_hash(),

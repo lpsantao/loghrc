@@ -68,7 +68,7 @@ def build_observation(env: "LogHrcEnv", layout: ChannelLayout) -> np.ndarray:
         if st.held_by is not None:
             # held = intersection: the holder's channel overlays the part
             _paint(obs[holder_channel[st.held_by]], pose, spec.size)
-        if env.show_targets and not st.at_target:
+        if env.show_targets and not env.role_filled(pid):
             _paint(obs[layout.target_channel[spec.cls]],
                    env.target_of(pid).as_tuple(), spec.size)
 

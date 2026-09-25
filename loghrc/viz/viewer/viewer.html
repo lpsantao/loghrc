@@ -176,8 +176,8 @@ function buildFrames(ep) {
         if (act) hands[e.agent] = [...act.path[act.path.length - 1]];
         active[e.agent] = null;
         if (e.ok) {
-          if ("held" in e) { parts[e.held].pose = null; parts[e.held].heldBy = e.agent; }
-          else if ("pose" in e) { parts[e.arg].pose = [...e.pose]; parts[e.arg].heldBy = null; }
+          if ("held" in e) { parts[e.held].pose = null; parts[e.held].heldBy = e.agent; parts[e.held].targetRole = null; }
+          else if ("pose" in e) { const p = parts[e.physical_part ?? e.arg]; p.pose = [...e.pose]; p.heldBy = null; p.targetRole = e.target_role ?? (e.verb === "place_target" ? e.arg : null); }
           else if (e.joint_done) joints[e.arg] = true;
         }
       }
@@ -194,7 +194,7 @@ function buildFrames(ep) {
     out.push({
       tick:t,
       parts: Object.fromEntries(Object.entries(parts).map(
-        ([id, p]) => [id, { pose: p.pose ? [...p.pose] : null, heldBy: p.heldBy }])),
+        ([id, p]) => [id, { pose: p.pose ? [...p.pose] : null, heldBy: p.heldBy, targetRole: p.targetRole ?? null }])),
       joints: { ...joints },
       hands: { [ROBOT]:[...hands[ROBOT]], [HUMAN]:[...hands[HUMAN]] },
       active: { [ROBOT]: active[ROBOT], [HUMAN]: active[HUMAN] },
@@ -313,7 +313,7 @@ function setFrame(i) {
       mesh.visible = true;
       mesh.position.set(wx + sx / 2, wy + sz / 2, wz + sy / 2);
     } else mesh.visible = false;
-    const atTarget = st.pose && st.pose.every((v, k) => v === p.target[k]);
+    const atTarget = Object.values(f.parts).some(q => q.targetRole === p.id);
     targetMeshes[p.id].visible = document.getElementById("showTargets").checked && !atTarget;
   }
   const [rx, ry, rz] = simToWorld(f.hands[ROBOT]);
@@ -338,7 +338,7 @@ function setFrame(i) {
   const nJoints = Object.keys(f.joints).length;
   const dJoints = Object.values(f.joints).filter(Boolean).length;
   const placed = Object.entries(f.parts).filter(([id, st]) =>
-    st.pose && ep.header.parts.find(p => p.id == id).target.every((v, k) => v === st.pose[k])).length;
+    st.targetRole !== null && st.targetRole !== undefined).length;
   kv("prog", { "parts placed": `${placed} / ${ep.header.parts.length}`,
                "joints done": `${dJoints} / ${nJoints}` });
   drawTimeline();
