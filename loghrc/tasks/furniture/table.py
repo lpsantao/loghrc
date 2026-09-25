@@ -143,12 +143,16 @@ def chair_config() -> TaskConfig:
 
 
 
-def journal_furniture_config(config: TaskConfig) -> TaskConfig:
+def journal_furniture_config(config: TaskConfig, *, interchangeable: bool = False) -> TaskConfig:
     """Journal interaction geometry: endpoint clearance and an off-work refuge.
 
     The legacy robot home (2, 2, 10) lies over the randomized staging region.
     Use the far lower-right corner so a robot at home does not occupy the
     human's staging/assembly approaches. This is a task choice, not core logic.
     """
+    groups = {}
+    for part in config.parts:
+        groups.setdefault((part.cls, part.size), []).append(part.id)
+    equivalent = tuple(tuple(ids) for ids in groups.values() if len(ids) > 1) if interchangeable else ()
     return replace(config, workspace_clearance=1.5, home_robot=Vox(30, 1, 10),
-                   observation_mode="voxels-joints")
+                   observation_mode="voxels-joints", interchangeable_groups=equivalent)

@@ -102,4 +102,5 @@ def test_replay_preserves_in_flight_timeout(horizon, verb):
     for pid, state in env.parts.items():
         assert final.parts[pid].pose == (state.pose.as_tuple() if state.pose else None)
         assert final.parts[pid].held_by == state.held_by
+        assert final.parts[pid].target_role == state.target_role
     assert (env.agents[ROBOT].held_part_id is not None) == (verb == "place_target")

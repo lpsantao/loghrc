@@ -54,7 +54,12 @@ def test_phase1_executor_rejects_human_takeover(mode):
     env = make_env(phase=1, profile='journal_fast', constraint_mode=mode)
     env.reset(seed=0)
     group = next(g for g in env.config.groups if env.allocation[g.name] == ROBOT)
-    ok, reason = env._start_action(HUMAN, 'pick', group.part_ids[0])
+    # Shared inventory can be picked; completing another agent's role cannot.
+    pid = group.part_ids[0]
+    env.parts[pid].pose = None
+    env.parts[pid].held_by = HUMAN
+    env.agents[HUMAN].held_part_id = pid
+    ok, reason = env._start_action(HUMAN, 'place_target', pid)
     assert not ok and 'allocation' in reason
     assert env.parts[group.part_ids[0]].reserved_by is None
     assert not run_wait(env)[0]
@@ -175,7 +180,7 @@ def test_work_destination_is_reserved_for_both_agents():
 def test_custom_human_cannot_bypass_phase1_allocation():
     class TakeoverHuman:
         def reset(self,config,rng): pass
-        def decide(self,env,rng): return 'pick',31,'act'
+        def decide(self,env,rng): return 'place_target',31,'act'
         def on_task_completed(self,rng): pass
     env=make_env(phase=1,profile='journal_fast',human_model=TakeoverHuman())
     env.reset(seed=0)

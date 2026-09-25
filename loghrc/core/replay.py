@@ -34,10 +34,11 @@ class ReplayPart:
     target: tuple[int, int, int]
     pose: tuple[int, int, int] | None = None
     held_by: int | None = None
+    target_role: int | None = None
 
     @property
     def at_target(self) -> bool:
-        return self.pose == self.target
+        return self.target_role is not None or self.pose == self.target
 
 
 @dataclass
@@ -124,9 +125,12 @@ class Replay:
                         if "held" in e:
                             parts[e["held"]].pose = None
                             parts[e["held"]].held_by = agent
+                            parts[e["held"]].target_role = None
                         elif "pose" in e:
-                            parts[arg].pose = tuple(e["pose"])
-                            parts[arg].held_by = None
+                            physical = e.get("physical_part", arg)
+                            parts[physical].pose = tuple(e["pose"])
+                            parts[physical].held_by = None
+                            parts[physical].target_role = e.get("target_role", arg if e["verb"] == "place_target" else None)
                         elif e.get("joint_done"):
                             joints[arg] = True
             # interpolate hands along the routed polyline for in-flight actions
@@ -138,7 +142,8 @@ class Replay:
                     prog = min(1.0, elapsed / act["dur"])
                     path = [tuple(map(float, p)) for p in act["path"]]
                     hands[agent] = pos_along_path(path, prog)
-            # Snapshot mutable state so collected frames retain their own poses.
+            # Snapshot mutable state: callers that collect states (e.g.
+            # rendering.export_video) must not see later ticks' block poses.
             yield ReplayState(tick=tick, parts={k: replace(p) for k, p in parts.items()},
                               joints_done=dict(joints),
                               hands=hands.copy(), active=dict(active),
@@ -164,6 +169,10 @@ class Replay:
         for jid_str, done in self.footer["joints_done"].items():
             if final.joints_done[int(jid_str)] != done:
                 raise AssertionError(f"joint {jid_str}: replay {final.joints_done[int(jid_str)]} != footer {done}")
+        for role, physical in self.footer.get("role_occupants", {}).items():
+            got = next((p.id for p in final.parts.values() if p.target_role == int(role)), None)
+            if got != physical:
+                raise AssertionError(f"role {role}: replay {got} != footer {physical}")
         return True
 
     # ------------------------------------------------------------------
@@ -174,7 +183,7 @@ class Replay:
         grid = np.zeros(self.grid_size, dtype=np.uint16)
         if show_targets:
             for p in state.parts.values():
-                if not p.at_target:
+                if not any(q.target_role == p.id for q in state.parts.values()):
                     self._paint(grid, p.target, p.size,
                                 self.class_labels[p.cls] + self.target_offset,
                                 empty_only=True)

@@ -102,10 +102,17 @@ class ScriptedPolicy(HumanModel):
         held = env.agents[self.agent].held_part_id
         if held is not None:
             part = env.config.part(held)
-            ok, message = physics.can_place_target(env, self.agent, part)
-            if ok and self._graph.allows_place_target(env, part):
-                return "place_target", held, "act"
-            if message == "workspace occupied by other agent":
+            spatial = False
+            for group in self._my_groups(env):
+                for role in group.part_ids:
+                    if role not in env.compatible_roles(held):
+                        continue
+                    target = env.config.part(role)
+                    ok, message = physics.can_place_target(env, self.agent, target)
+                    if ok and self._graph.allows_place_target(env, target):
+                        return "place_target", role, "act"
+                    spatial |= message == "workspace occupied by other agent"
+            if spatial:
                 return "wait", None, "spatial_blocked"
             ok_s, _ = physics.can_place_staging(env, self.agent, part)
             if ok_s:
@@ -158,8 +165,7 @@ class ScriptedPolicy(HumanModel):
 
         for g in self._my_groups(env):
             for pid in g.part_ids:
-                st = env.parts[pid]
-                if not (st.at_target or st.attached):
+                if not env.role_filled(pid):
                     return False
             for jid in g.joint_ids:
                 if not env.joints_done[jid]:
@@ -194,15 +200,19 @@ class ScriptedPolicy(HumanModel):
     def _next_group_step(self, env: "LogHrcEnv", g: Group) -> tuple[str, int] | None:
         # Placement steps in group (config order encodes foot -> dowel -> top).
         for pid in g.part_ids:
-            st = env.parts[pid]
-            if st.at_target or st.attached:
+            if env.role_filled(pid):
                 continue
-            part = env.config.part(pid)
-            if self._graph.pick_useful(env, part):
-                ok, message = physics.can_pick(env, self.agent, part)
-                self._spatially_blocked |= message == "workspace occupied by other agent"
-                if ok:
-                    return "pick", pid
+            role = env.config.part(pid)
+            candidates = [p for p in env.config.parts if pid in env.compatible_roles(p.id)
+                          and not env.parts[p.id].at_target and not env.parts[p.id].attached
+                          and env.parts[p.id].pose is not None]
+            candidates.sort(key=lambda p: (env.parts[p.id].pose.as_tuple(), p.id))
+            for part in candidates:
+                if self._graph.role_ready(env, role, part.id):
+                    ok, message = physics.can_pick(env, self.agent, part)
+                    self._spatially_blocked |= message == "workspace occupied by other agent"
+                    if ok:
+                        return "pick", part.id
             return None  # group blocked at this part (support/prereq/held elsewhere)
         # Fastening steps.
         for jid in g.joint_ids:

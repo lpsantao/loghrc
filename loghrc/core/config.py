@@ -41,7 +41,7 @@ class PartSpec:
     size: tuple[int, int, int]
     start: Vox
     target: Vox
-    # PHYSICAL support: part ids that must already be at target before this
+    # PHYSICAL support: role ids that must already be filled before this
     # part can be placed at target (enforced by core physics).
     support: tuple[int, ...] = ()
     # PROCEDURAL prerequisites (joint ids) — consumed only by the pluggable
@@ -51,7 +51,7 @@ class PartSpec:
 
 @dataclass(frozen=True)
 class JointSpec:
-    """A fastening step (screws abstracted). Done once attached."""
+    """A fastening step between two assembly roles. Done once attached."""
 
     id: int
     name: str
@@ -64,7 +64,8 @@ class JointSpec:
 class Group:
     """Sub-assembly grouping used for allocation and human preferences.
 
-    ``part_ids`` order is a pipeline contract, not just a listing: the
+    ``part_ids`` identifies assembly roles, not inventory ownership. Its
+    order is a pipeline contract, not just a listing: the
     scripted policy (``humans.scripted.ScriptedPolicy._next_group_step``)
     walks it front-to-back and stops at the first unplaced part, so it must
     already be in physical/procedural dependency order (e.g. foot -> dowel ->
@@ -127,6 +128,10 @@ class TaskConfig:
     # Optional factual task state alongside the unchanged voxel tensor.
     observation_mode: str = "voxels"  # voxels | voxels-joints
 
+    # Physical pieces in each tuple can fill any of the corresponding roles.
+    # Role IDs retain the PartSpec target/support and JointSpec dependencies.
+    interchangeable_groups: tuple[tuple[int, ...], ...] = ()
+
     def part(self, part_id: int) -> PartSpec:
         return self._parts_by_id[part_id]
 
@@ -138,6 +143,16 @@ class TaskConfig:
 
     def __post_init__(self) -> None:
         import math
+        seen = set()
+        by_id = {p.id: p for p in self.parts}
+        for group in self.interchangeable_groups:
+            if len(group) < 2 or len(set(group)) != len(group) or seen.intersection(group):
+                raise ValueError("interchangeable groups must be disjoint with at least two distinct pieces")
+            if any(pid not in by_id for pid in group):
+                raise ValueError("unknown interchangeable piece")
+            if len({(by_id[pid].cls, by_id[pid].size) for pid in group}) != 1:
+                raise ValueError("interchangeable pieces must have the same class and size")
+            seen.update(group)
         if self.observation_mode not in ("voxels", "voxels-joints"):
             raise ValueError("observation_mode must be voxels or voxels-joints")
         if not math.isfinite(self.workspace_clearance) or self.workspace_clearance < 0:
@@ -150,7 +165,8 @@ class TaskConfig:
         """Every declarative field that can change task or default MDP semantics."""
 
         return {
-            "schema": 1,
+            "schema": 2,
+            "interchangeable_groups": self.interchangeable_groups,
             "name": self.name,
             "grid_size": self.grid_size,
             "voxel_size_cm": self.voxel_size_cm,

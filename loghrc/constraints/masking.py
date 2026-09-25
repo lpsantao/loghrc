@@ -55,8 +55,13 @@ def allocation_mask(env: "LogHrcEnv", allocation: dict[str, int] | None,
     if allocation is None:
         return mask
     for idx, (verb, arg) in enumerate(env.action_table):
-        if verb in ("pick", "place_target", "place_staging"):
+        if verb == "pick":
+            mask[idx] = any(part_agent(env.config, allocation, role) == agent and not env.role_filled(role)
+                            for role in env.compatible_roles(arg))
+        elif verb == "place_target":
             mask[idx] = part_agent(env.config, allocation, arg) == agent
+        elif verb == "place_staging":
+            mask[idx] = True  # recovery is tied to the held object, not its original role
         elif verb == "attach":
             mask[idx] = joint_agent(env.config, allocation, arg) == agent
     return mask

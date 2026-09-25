@@ -44,10 +44,14 @@ class DefaultTaskGraph:
         st = world.parts[part.id]
         if st.attached or st.at_target:
             return False
-        supports_ok = all(world.parts[s].at_target for s in part.support)
-        target_free = world.region_free(world.target_of(part.id), part.size,
-                                        ignore_part_id=part.id)
-        return supports_ok and target_free and self.allows_place_target(world, part)
+        return any(self.role_ready(world, world.config.part(role), part.id)
+                   for role in world.compatible_roles(part.id))
+
+    def role_ready(self, world, role, physical_id):
+        return (not world.role_filled(role.id)
+                and all(world.role_filled(s) for s in role.support)
+                and world.region_free(world.target_of(role.id), role.size, ignore_part_id=physical_id)
+                and self.allows_place_target(world, role))
 
 
 def resolve_graph(config, graph) -> "DefaultTaskGraph | None":
