@@ -7,7 +7,7 @@ reconstructed from the header (geometry) + events (state deltas).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -138,7 +138,9 @@ class Replay:
                     prog = min(1.0, elapsed / act["dur"])
                     path = [tuple(map(float, p)) for p in act["path"]]
                     hands[agent] = pos_along_path(path, prog)
-            yield ReplayState(tick=tick, parts=parts, joints_done=joints,
+            # Snapshot mutable state so collected frames retain their own poses.
+            yield ReplayState(tick=tick, parts={k: replace(p) for k, p in parts.items()},
+                              joints_done=dict(joints),
                               hands=hands.copy(), active=dict(active),
                               events_now=events_now)
 

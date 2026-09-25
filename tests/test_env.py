@@ -278,7 +278,11 @@ def test_hands_never_inside_placed_parts(tmp_path, task_name, seed):
     )
     success, info = run_scripted(env, seed=seed)
     replay = Replay.load(info["episode_log"])
-    for state in replay.states():
+    states = list(replay.states())
+    assert states[0].parts is not states[-1].parts
+    assert tuple(p.pose for p in states[0].parts.values()) != tuple(
+        p.pose for p in states[-1].parts.values())
+    for state in states:
         occupied = set()
         for p in state.parts.values():
             if p.pose is None:

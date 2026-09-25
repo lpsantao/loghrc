@@ -283,7 +283,8 @@ class LogHrcEnv(gym.Env):
                              "message": message})
             self._begin(ROBOT, "invalid", None, 1, self.agents[ROBOT].hand)
 
-        while self.agents[ROBOT].action is not None and not self._episode_over:
+        while (self.agents[ROBOT].action is not None
+               and self.t < self.config.max_ticks and not self._episode_over):
             self._tick()
 
         terminated = self.is_complete()
@@ -339,8 +340,11 @@ class LogHrcEnv(gym.Env):
                 elif reason == "scope_complete":
                     self.counters.human_idle_scope_complete += 1
                 ticks = self.human_profile.pause_ticks if reason == "pause" else 1
-                self.counters.human_idle_choice += max(ticks, 1)
                 self._begin(HUMAN, "wait", None, max(ticks, 1), human.hand)
+
+        # Count elapsed idle time, including partial pauses at episode end.
+        if human.action is not None and human.action.verb == "wait":
+            self.counters.human_idle_choice += 1
 
         for agent_id in (ROBOT, HUMAN):
             act = self.agents[agent_id].action
