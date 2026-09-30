@@ -254,10 +254,17 @@ def test_metrics_summary_keys():
     env = LogHrcEnv(config=two_leg_table_config(), human_profile="hesitant")
     success, info = run_scripted(env, seed=11)
     m = info["episode_metrics"]
-    for key in ("success", "ticks", "conflicts", "proximity_violations",
-                "human_idle_blocked", "human_idle_choice", "human_blocked_attempts",
-                "human_interruptions"):
+    for key in ("success", "ticks", "conflicts", "coordination_conflicts",
+                "proximity_violations", "hand_voxel_overlap_events",
+                "hand_voxel_overlap_duration_ticks", "human_idle_blocked",
+                "human_idle_unavailable", "human_idle_robot_blocked",
+                "human_idle_choice", "human_blocked_attempts",
+                "human_interruptions", "human_idle_ticks", "robot_idle_ticks",
+                "concurrent_activity_ticks", "human_idle_rate",
+                "robot_idle_rate", "concurrent_activity_rate"):
         assert key in m
+    assert "collisions" not in m  # contact dynamics are not modelled
+    assert m["human_idle_unavailable"] == m["human_idle_blocked"]
     assert m["human_interruptions"] == 0  # operations are non-interruptible
     assert m["ticks"] > 0
 
