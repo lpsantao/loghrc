@@ -59,6 +59,27 @@ def test_partial_pause_counts_only_elapsed_time():
     assert env.agents[HUMAN].action.remaining == 7
 
 
+def test_hoffman_activity_rates_count_perceptible_activity():
+    env = make_env(max_ticks=3)
+    wait = env.action_table.index(("wait", None))
+    while True:
+        _, _, terminated, truncated, info = env.step(wait)
+        if terminated or truncated:
+            break
+    metrics = info["episode_metrics"]
+    assert metrics["human_idle_ticks"] == metrics["robot_idle_ticks"] == 3
+    assert metrics["concurrent_activity_ticks"] == 0
+    assert metrics["human_idle_rate"] == metrics["robot_idle_rate"] == 1.0
+    assert metrics["concurrent_activity_rate"] == 0.0
+
+
+def test_zero_length_move_home_is_perceptibly_idle():
+    env = make_env(max_ticks=1)
+    home = env.action_table.index(("move_home", None))
+    _, _, _, _, info = env.step(home)
+    assert info["episode_metrics"]["robot_idle_ticks"] == 1
+
+
 def test_completion_on_final_tick_is_success_not_truncation():
     env = make_env()
     env.is_complete = lambda: env.t >= 1
