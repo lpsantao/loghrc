@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from loghrc.core import physics
-from loghrc.core.config import Group, ROBOT, TaskConfig
+from loghrc.core.config import Group, HUMAN, ROBOT, TaskConfig
+from loghrc.constraints.allocation import joint_agent, part_agent
 from loghrc.humans.interface import HumanModel
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -65,6 +66,7 @@ class ScriptedPolicy(HumanModel):
         self._order: list[str] = []
         self.engaged = True
         self._blocked_streak = 0
+        self._blocked_by_robot = False
         self._graph = None
 
     def reset(self, config: TaskConfig, rng: np.random.Generator) -> None:
@@ -89,6 +91,7 @@ class ScriptedPolicy(HumanModel):
                 raise ValueError(f"unknown profile groups: {sorted(unknown)}")
         self.engaged = True
         self._blocked_streak = 0
+        self._blocked_by_robot = False
 
     def on_task_completed(self, rng: np.random.Generator) -> None:
         """Called by the env when this agent completes a task (place/attach).
@@ -135,7 +138,9 @@ class ScriptedPolicy(HumanModel):
                 return "move_home", None, "act"
             if self._fully_done(env):
                 return "wait", None, "scope_complete"
-            return "wait", None, "spatial_blocked" if self._spatially_blocked else "blocked"
+            if self._spatially_blocked:
+                return "wait", None, "spatial_blocked"
+            return "wait", None, "robot_blocked" if self._blocked_by_robot else "blocked"
         self._blocked_streak = 0
         # Safety-margin hesitation: hold off while the robot hand is too close.
         if self.profile.safety_margin > 0:
@@ -185,6 +190,7 @@ class ScriptedPolicy(HumanModel):
 
     def _next_task(self, env: "LogHrcEnv") -> tuple[str, int] | None:
         self._spatially_blocked = False
+        self._blocked_by_robot = False
         for g in self._my_groups(env):
             step = self._next_group_step(env, g)
             if step is not None:
@@ -198,9 +204,11 @@ class ScriptedPolicy(HumanModel):
             if st.at_target or st.attached:
                 continue
             part = env.config.part(pid)
+            self._mark_robot_part_blockers(env, part)
             if self._graph.pick_useful(env, part):
                 ok, message = physics.can_pick(env, self.agent, part)
                 self._spatially_blocked |= message == "workspace occupied by other agent"
+                self._blocked_by_robot |= self._robot_caused(env, message)
                 if ok:
                     return "pick", pid
             return None  # group blocked at this part (support/prereq/held elsewhere)
@@ -210,10 +218,47 @@ class ScriptedPolicy(HumanModel):
                 continue
             joint = env.config.joint(jid)
             if not self._graph.allows_attach(env, joint):
+                if env.allocation is not None:
+                    self._blocked_by_robot |= any(
+                        not env.joints_done[prereq]
+                        and joint_agent(env.config, env.allocation, prereq) == ROBOT
+                        for prereq in joint.prereq_joints
+                    )
                 return None
             ok, message = physics.can_attach(env, self.agent, joint)
             self._spatially_blocked |= message == "workspace occupied by other agent"
+            self._blocked_by_robot |= self._robot_caused(env, message)
+            if not ok and env.allocation is not None:
+                self._blocked_by_robot |= any(
+                    not env.parts[pid].at_target
+                    and part_agent(env.config, env.allocation, pid) == ROBOT
+                    for pid in joint.parts
+                )
             if ok:
                 return "attach", jid
             return None
         return None
+
+    def _mark_robot_part_blockers(self, env: "LogHrcEnv", part) -> None:
+        if self.agent != HUMAN:
+            return
+        state = env.parts[part.id]
+        self._blocked_by_robot |= state.held_by == ROBOT or state.reserved_by == ROBOT
+        if env.allocation is None:
+            return
+        self._blocked_by_robot |= any(
+            not env.parts[support].at_target
+            and part_agent(env.config, env.allocation, support) == ROBOT
+            for support in part.support
+        )
+        self._blocked_by_robot |= any(
+            not env.joints_done[joint]
+            and joint_agent(env.config, env.allocation, joint) == ROBOT
+            for joint in part.proc_prereq_joints
+        )
+
+    def _robot_caused(self, env: "LogHrcEnv", message: str) -> bool:
+        return self.agent == HUMAN and any(fragment in message for fragment in (
+            "held by other agent", "reserved by other agent",
+            "workspace occupied by other agent",
+        ))
