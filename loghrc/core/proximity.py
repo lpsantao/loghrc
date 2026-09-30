@@ -77,3 +77,56 @@ def encounters(frame, threshold=1.5):
             intervals.append([frame['t']-1 + left + lo*(right-left),
                               frame['t']-1 + left + hi*(right-left)])
     return merge(intervals)
+
+
+def hand_voxel(position, grid_size):
+    """Map a continuous hand anchor to the observation grid's nearest voxel."""
+    return tuple(
+        min(grid_size[axis] - 1, max(0, round(value)))
+        for axis, value in enumerate(position)
+    )
+
+
+def _voxel_boundary_splits(frame, agent, left, right, axis):
+    """Fractions where one linear hand segment crosses a rounding boundary."""
+    start = position(frame, agent, left)[axis]
+    end = position(frame, agent, right)[axis]
+    if abs(end - start) <= 1e-12:
+        return []
+    low, high = sorted((start, end))
+    first = math.ceil(low - .5)
+    last = math.floor(high - .5)
+    result = []
+    for cell in range(first, last + 1):
+        boundary = cell + .5
+        if low + 1e-12 < boundary < high - 1e-12:
+            local = (boundary - start) / (end - start)
+            result.append(left + local * (right - left))
+    return result
+
+
+def voxel_overlaps(frame, grid_size):
+    """Closed time intervals where both hand anchors occupy the same voxel.
+
+    Trajectory corners and every nearest-voxel boundary crossing split the
+    tick. Boundary-only coincidences are excluded because they have no stable
+    voxel occupancy and zero duration; continuous proximity still records
+    those contacts.
+    """
+    route_splits = sorted(set([0., 1., *knots(frame['actions'][0]),
+                               *knots(frame['actions'][1])]))
+    splits = set(route_splits)
+    for left, right in zip(route_splits, route_splits[1:]):
+        for agent in (0, 1):
+            for axis in range(3):
+                splits.update(_voxel_boundary_splits(
+                    frame, agent, left, right, axis))
+    splits = sorted(splits)
+    intervals = []
+    for left, right in zip(splits, splits[1:]):
+        midpoint = (left + right) / 2
+        robot_voxel = hand_voxel(position(frame, 0, midpoint), grid_size)
+        human_voxel = hand_voxel(position(frame, 1, midpoint), grid_size)
+        if robot_voxel == human_voxel:
+            intervals.append([frame['t'] - 1 + left, frame['t'] - 1 + right])
+    return merge(intervals)

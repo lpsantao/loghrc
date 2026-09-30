@@ -330,7 +330,7 @@ function setFrame(i) {
     const col = VERB_COLORS[act.verb] || "#555";
     return `<span class='badge' style='background:${col}'>${act.verb}${act.name ? "(" + act.name + ")" : ""}</span>`;
   };
-  const evts = f.events.filter(e => ["invalid","conflict","safety"].includes(e.type))
+  const evts = f.events.filter(e => ["invalid","conflict","safety","hand_voxel_overlap"].includes(e.type))
     .map(e => `<div class='evt'>⚠ ${e.type}${e.message ? ": " + e.message : ""}</div>`).join("");
   document.getElementById("actions").innerHTML =
     `<div class='agent-line'>🤖 robot ${fmt(ROBOT)}</div>
@@ -365,7 +365,7 @@ function drawTimeline() {
       ctx.fillStyle = VERB_COLORS[e.verb] || "#555";
       const start = e.t - (e.agent === HUMAN ? 1 : 0);
       ctx.fillRect(x(start), y, Math.max(2, x(start + e.dur) - x(start) - 0.5), 14);
-    } else if (["invalid","conflict","safety"].includes(e.type)) {
+    } else if (["invalid","conflict","safety","hand_voxel_overlap"].includes(e.type)) {
       ctx.fillStyle = "#ff4444";
       ctx.beginPath();
       ctx.moveTo(x(e.t), 52); ctx.lineTo(x(e.t) - 3, 60); ctx.lineTo(x(e.t) + 3, 60);
@@ -394,6 +394,8 @@ function loadEpisode(buf, name) {
                episode:h.episode_id, "config hash":h.config_hash });
   kv("metrics", { success:m.success, ticks:m.ticks, conflicts:m.conflicts,
                   "safety viol.":m.safety_violations, "invalid (robot)":m.invalid_robot_actions,
+                  "voxel overlap events":m.hand_voxel_overlap_events ?? "—",
+                  "voxel overlap duration":m.hand_voxel_overlap_duration_ticks ?? "—",
                   "idle blocked":m.human_idle_blocked, "idle choice":m.human_idle_choice,
                   interruptions:m.human_interruptions, "failed actions":m.failed_actions });
   kv("profile", Object.fromEntries(Object.entries(h.profile).map(

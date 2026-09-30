@@ -29,7 +29,7 @@ from loghrc.core.config import (
 )
 from loghrc.core.geometry import boxes_overlap, pos_along_path
 from loghrc.core.goal import default_goal
-from loghrc.core.proximity import encounters, position
+from loghrc.core.proximity import encounters, hand_voxel, position, voxel_overlaps
 from loghrc.core.labels import part_class_manifest, part_class_name
 from loghrc.core.observation import ChannelLayout, build_observation
 from loghrc.core.provenance import component_spec, fingerprint, runtime_manifest, source_manifest
@@ -74,9 +74,12 @@ class AgentState:
 @dataclass
 class _Counters:
     conflicts: int = 0
+    coordination_conflicts: int = 0
     safety_violations: int = 0
+    hand_voxel_overlap_events: int = 0
     invalid_robot: int = 0
     human_idle_blocked: int = 0
+    human_idle_robot_blocked: int = 0
     human_idle_choice: int = 0
     human_blocked_attempts: int = 0
     human_interruptions: int = 0  # operations remain non-interruptible
@@ -86,6 +89,9 @@ class _Counters:
     failed_actions: int = 0
     robot_tasks: int = 0   # successful place_target/attach by the robot
     human_tasks: int = 0   # ... by the human (division metric, CASE Phase 2)
+    human_idle_ticks: int = 0
+    robot_idle_ticks: int = 0
+    concurrent_activity_ticks: int = 0
 
 
 class LogHrcEnv(gym.Env):
@@ -225,6 +231,8 @@ class LogHrcEnv(gym.Env):
         self.counters = _Counters()
         self._proximity_active = False
         self._proximity_duration = 0.0
+        self._voxel_overlap_active = False
+        self._voxel_overlap_duration = 0.0
         self._human_wait_reason = None
         self.events: list[dict[str, Any]] = []
         self._window: list[dict[str, Any]] = []
@@ -279,6 +287,8 @@ class LogHrcEnv(gym.Env):
         valid, message = self._start_action(ROBOT, verb, arg)
         if not valid:
             self.counters.invalid_robot += 1
+            if self._other_agent_caused(message):
+                self.counters.coordination_conflicts += 1
             self._log_event({"type": "invalid", "agent": ROBOT, "verb": verb, "arg": arg,
                              "message": message})
             self._begin(ROBOT, "invalid", None, 1, self.agents[ROBOT].hand)
@@ -325,15 +335,24 @@ class LogHrcEnv(gym.Env):
                 if not ok:
                     self.counters.conflicts += 1
                     self.counters.human_blocked_attempts += 1
+                    robot_caused = self._other_agent_caused(msg)
+                    if robot_caused:
+                        self.counters.coordination_conflicts += 1
+                        self.counters.human_idle_robot_blocked += 1
                     self._log_event({"type": "conflict", "agent": HUMAN, "verb": verb,
-                                     "arg": arg, "message": msg})
+                                     "arg": arg, "message": msg,
+                                     "robot_caused": robot_caused})
                     self._window.append({"type": "conflict"})
                     self.counters.human_idle_blocked += 1
-            elif reason in ("blocked", "spatial_blocked"):
+            elif reason in ("blocked", "spatial_blocked", "robot_blocked"):
                 self.counters.human_idle_blocked += 1
+                robot_caused = reason in ("spatial_blocked", "robot_blocked")
+                if robot_caused:
+                    self.counters.human_idle_robot_blocked += 1
                 if reason == "spatial_blocked":
                     self.counters.human_idle_spatial += 1
-                self._window.append({"type": "human_blocked"})
+                self._window.append({"type": "human_blocked", "reason": reason,
+                                     "robot_caused": robot_caused})
             else:  # deliberate wait, distinguished from dependency/space blocking
                 if reason == "waiting_initiative":
                     self.counters.human_waiting_initiative += 1
@@ -345,6 +364,12 @@ class LogHrcEnv(gym.Env):
         # Count elapsed idle time, including partial pauses at episode end.
         if human.action is not None and human.action.verb == "wait":
             self.counters.human_idle_choice += 1
+
+        robot_active = self._perceptibly_active(ROBOT)
+        human_active = self._perceptibly_active(HUMAN)
+        self.counters.robot_idle_ticks += int(not robot_active)
+        self.counters.human_idle_ticks += int(not human_active)
+        self.counters.concurrent_activity_ticks += int(robot_active and human_active)
 
         for agent_id in (ROBOT, HUMAN):
             act = self.agents[agent_id].action
@@ -423,6 +448,21 @@ class LogHrcEnv(gym.Env):
                         physics.attach_destination(self, joint))
             return True, "ok"
         return False, f"unknown verb {verb}"
+
+    @staticmethod
+    def _other_agent_caused(message: str) -> bool:
+        return any(fragment in message for fragment in (
+            "held by other agent", "reserved by other agent",
+            "workspace occupied by other agent",
+        ))
+
+    def _perceptibly_active(self, agent: int) -> bool:
+        action = self.agents[agent].action
+        if action is None or action.verb in ("wait", "invalid"):
+            return False
+        if action.verb == "move_home":
+            return any(point != action.path[0] for point in action.path[1:])
+        return True
 
     def _begin(self, agent: int, verb: str, arg: int | None, dur: int,
                to: tuple[float, float, float]) -> None:
@@ -542,6 +582,28 @@ class LogHrcEnv(gym.Env):
             self._proximity_active = False
         self._proximity_active = bool(intervals and abs(intervals[-1][1] - self.t) <= 1e-9)
 
+        overlap_intervals = voxel_overlaps(frame, self.config.grid_size)
+        for start, end in overlap_intervals:
+            self._voxel_overlap_duration += end - start
+            continues = (self._voxel_overlap_active
+                         and abs(start - (self.t - 1)) <= 1e-9)
+            if not continues:
+                self.counters.hand_voxel_overlap_events += 1
+                fraction = min(1.0, max(0.0, start - (self.t - 1) + 1e-9))
+                self._log_event({
+                    "type": "hand_voxel_overlap", "overlap_start": start,
+                    "voxel": list(hand_voxel(
+                        position(frame, ROBOT, fraction), self.config.grid_size)),
+                    "robot_hand": list(position(frame, ROBOT, fraction)),
+                    "human_hand": list(position(frame, HUMAN, fraction)),
+                })
+                self._window.append({"type": "hand_voxel_overlap"})
+            self._voxel_overlap_active = False
+        self._voxel_overlap_active = bool(
+            overlap_intervals
+            and abs(overlap_intervals[-1][1] - self.t) <= 1e-9
+        )
+
     # ------------------------------------------------------------------
     # World queries
     # ------------------------------------------------------------------
@@ -646,15 +708,21 @@ class LogHrcEnv(gym.Env):
 
     def metrics_summary(self, success: bool) -> dict[str, Any]:
         c = self.counters
+        ticks = max(1, self.t)
         return {
             "success": bool(success),
             "ticks": self.t,
             "conflicts": c.conflicts,
+            "coordination_conflicts": c.coordination_conflicts,
             "safety_violations": c.safety_violations,
             "proximity_violations": c.safety_violations,
             "proximity_duration_ticks": self._proximity_duration,
+            "hand_voxel_overlap_events": c.hand_voxel_overlap_events,
+            "hand_voxel_overlap_duration_ticks": self._voxel_overlap_duration,
             "invalid_robot_actions": c.invalid_robot,
             "human_idle_blocked": c.human_idle_blocked,
+            "human_idle_unavailable": c.human_idle_blocked,
+            "human_idle_robot_blocked": c.human_idle_robot_blocked,
             "human_idle_choice": c.human_idle_choice,
             "human_blocked_attempts": c.human_blocked_attempts,
             "human_interruptions": c.human_interruptions,
@@ -662,6 +730,12 @@ class LogHrcEnv(gym.Env):
             "human_idle_scope_complete": c.human_idle_scope_complete,
             "human_idle_spatial": c.human_idle_spatial,
             "failed_actions": c.failed_actions,
+            "human_idle_ticks": c.human_idle_ticks,
+            "robot_idle_ticks": c.robot_idle_ticks,
+            "concurrent_activity_ticks": c.concurrent_activity_ticks,
+            "human_idle_rate": c.human_idle_ticks / ticks,
+            "robot_idle_rate": c.robot_idle_ticks / ticks,
+            "concurrent_activity_rate": c.concurrent_activity_ticks / ticks,
             "joints_done": sum(self.joints_done.values()),
             "parts_placed": sum(st.at_target for st in self.parts.values()),
             "robot_tasks": c.robot_tasks,
@@ -730,8 +804,12 @@ class LogHrcEnv(gym.Env):
         identity = {
             "schema": 1,
             "interaction_semantics": "journal-v2",
+            "metric_semantics": "hrc-metrics-v2",
             "proximity_semantics": "continuous-hand-chebyshev-events-v1",
             "proximity_threshold_voxels": 1.5,
+            "collision_semantics": "not-modeled",
+            "activity_semantics": "perceptible-action-ticks-v1",
+            "hand_voxel_overlap_semantics": "rounded-clipped-hand-anchor-cooccupancy-v1",
             "task_hash": self.config.task_hash(),
             "task": self.config.name,
             "phase": self.phase,
