@@ -50,8 +50,13 @@ def aggregate_index(run_dir: str | Path) -> dict[str, float]:
         if value in (None, "") and k in aliases:
             value = r.get(aliases[k])
         return int(float(value or 0))
+    def optional_mean(key):
+        values = [r.get(key) for r in rows]
+        if any(value in (None, "") for value in values):
+            return None
+        return mean(float(value) for value in values)
     succ = [1.0 if r["success"] in ("True", "1") else 0.0 for r in rows]
-    return {
+    result = {
         "episodes": len(rows),
         "success_rate": mean(succ),
         "mean_ticks": mean(as_int(r, "ticks") for r in rows),
@@ -67,3 +72,13 @@ def aggregate_index(run_dir: str | Path) -> dict[str, float]:
         "mean_fluency": mean(fluency_score(r) for r in rows),
         "mean_symbiosis": mean(symbiosis_score(r) for r in rows),
     }
+    for field in (
+        "coordination_conflicts", "human_idle_unavailable",
+        "human_idle_robot_blocked", "human_idle_rate", "robot_idle_rate",
+        "concurrent_activity_rate", "proximity_duration_ticks",
+        "hand_voxel_overlap_events", "hand_voxel_overlap_duration_ticks",
+    ):
+        value = optional_mean(field)
+        if value is not None:
+            result[f"mean_{field}"] = value
+    return result
