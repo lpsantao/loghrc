@@ -132,8 +132,11 @@ Shelf (54 components) explicitly out of scope.
 5. **Reward — composite, all terms toggleable** (enables the reward ablation, chair case):
    - terminal task-completion reward;
    - sub-goal shaping per completed recipe/sub-assembly (P4 methodology);
-   - fluency terms: penalties for human idle time caused by the robot, part
-     conflicts, safety violations (RQ4 proxies inside the reward);
+   - fluency terms: a legacy penalty for ticks with no executable human task,
+     human rejected-start conflicts, and proximity violations (RQ4 proxies
+     inside the reward). Reporting separately uses symmetric coordination
+     conflicts, a conservative robot-caused-idle subset, continuous hand
+     proximity, and same-anchor-voxel overlap;
    - small per-tick step penalty (RQ3 efficiency);
    - sparse-only configuration retained as an ablation arm.
 6. **Human model — scripted stochastic profiles now, IKEA-calibrated later.**
