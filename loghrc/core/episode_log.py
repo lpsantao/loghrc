@@ -22,10 +22,15 @@ INDEX_FIELDS = [
     "episode", "file", "config", "task_hash", "experiment_hash", "phase",
     "constraint_mode", "invalid_action_penalty", "profile", "reward_hash", "seed",
     "success", "ticks", "reward",
-    "conflicts", "safety_violations", "proximity_violations", "proximity_duration_ticks",
+    "conflicts", "coordination_conflicts",
+    "safety_violations", "proximity_violations", "proximity_duration_ticks",
+    "hand_voxel_overlap_events", "hand_voxel_overlap_duration_ticks",
     "invalid_robot_actions",
-    "human_idle_blocked", "human_idle_choice", "human_blocked_attempts", "human_interruptions",
+    "human_idle_blocked", "human_idle_unavailable", "human_idle_robot_blocked",
+    "human_idle_choice", "human_blocked_attempts", "human_interruptions",
     "human_waiting_initiative", "human_idle_scope_complete", "human_idle_spatial",
+    "human_idle_ticks", "robot_idle_ticks", "concurrent_activity_ticks",
+    "human_idle_rate", "robot_idle_rate", "concurrent_activity_rate",
     "failed_actions", "joints_done", "parts_placed", "robot_tasks", "human_tasks",
 ]
 
