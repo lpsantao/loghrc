@@ -182,3 +182,39 @@ def test_custom_human_cannot_bypass_phase1_allocation():
     env.step(1)
     assert env.parts[31].reserved_by is None
     assert env.counters.human_blocked_attempts>0
+
+
+def test_direct_robot_resource_block_is_a_coordination_conflict():
+    class SamePartHuman:
+        def reset(self,config,rng): pass
+        def decide(self,env,rng): return 'pick',31,'act'
+        def on_task_completed(self,rng): pass
+    env=make_env(phase=2,profile='journal_proactive',human_model=SamePartHuman())
+    env.reset(seed=0)
+    pick=env.action_table.index(('pick',31))
+    env.step(pick)
+    assert env.counters.coordination_conflicts>0
+    assert env.counters.human_idle_robot_blocked>0
+
+
+def test_robot_rejected_by_human_resource_is_a_coordination_conflict():
+    env=make_env(phase=2,profile='journal_proactive')
+    env.reset(seed=0)
+    assert env._start_action(HUMAN,'pick',31)[0]
+    pick=env.action_table.index(('pick',31))
+    env.step(pick)
+    assert env.counters.invalid_robot==1
+    assert env.counters.coordination_conflicts==1
+
+
+def test_human_waiting_on_robot_owned_dependency_is_robot_blocked():
+    env=make_env(phase=1,profile='journal_fast')
+    env.reset(seed=0)
+    for pid in (34,14,24):
+        env.parts[pid].at_target=True
+    env.joints_done[104]=True
+    env.joints_done[204]=True
+    wait=env.action_table.index(('wait',None))
+    env.step(wait)
+    assert env._human_wait_reason=='robot_blocked'
+    assert env.counters.human_idle_robot_blocked==env.t
