@@ -221,23 +221,58 @@ experimental arm, all rows should share one experiment hash.
 ## 10. Raw metric definitions
 
 Raw counters are primary evidence. Derived composite scores are secondary.
+The H-IDLE/R-IDLE/C-ACT names follow Guy Hoffman, *Evaluating Fluency in
+Human–Robot Collaboration* (IEEE THMS, 2019,
+https://doi.org/10.1109/THMS.2019.2904558).
 
 | Field | Exact simulator definition | Interpretation guardrail |
 |---|---|---|
 | `success` | Declarative goal satisfied before `max_ticks`. | Task success, not policy optimality. |
 | `ticks` | Number of simulator ticks elapsed. | Primary completion-efficiency measure among successful episodes. |
+| `human_idle_ticks` / `human_idle_rate` | Ticks, and fraction of episode ticks, where the human has no perceptible action. | Operationalization of Hoffman H-IDLE; it includes every cause of human inactivity. |
+| `robot_idle_ticks` / `robot_idle_rate` | Ticks, and fraction of episode ticks, where the robot has no perceptible action. | Operationalization of Hoffman R-IDLE. |
+| `concurrent_activity_ticks` / `concurrent_activity_rate` | Ticks, and fraction of episode ticks, where both agents have perceptible actions. | Operationalization of Hoffman C-ACT; a team measure, not a human-only measure. |
+| `coordination_conflicts` | Action starts by either agent rejected because the other agent holds/reserves the same part or occupies the required workspace. | Canonical symmetric conflict counter. It excludes graph/allocation errors with no direct other-agent cause. |
 | `conflicts` | Human action-start attempts rejected because the action was no longer executable. | Currently the backward-compatible name for the same events counted by `human_blocked_attempts`; never sum the two. |
 | `human_blocked_attempts` | Count of rejected human action-start attempts. | Coordination failure at a decision point, not a mid-action interruption. |
 | `human_interruptions` | A started human action that is subsequently aborted. | Current actions are non-interruptible, so this is expected to remain zero. |
-| `human_idle_blocked` | Ticks where the scripted human reports no currently executable task. | Includes dependency/task-structure waiting; it is not automatically proof that the robot caused the idle time. |
+| `human_idle_unavailable` | Ticks where the scripted human reports no currently executable task. | Includes dependency/task-structure waiting; it is not automatically proof that the robot caused the idle time. |
+| `human_idle_robot_blocked` | Conservative subset of unavailable ticks with direct evidence of a robot-held/reserved resource, robot-owned unmet dependency, or robot workspace occupancy. | Use for the claim "the robot blocked the human"; it deliberately prefers false negatives over unsupported attribution. |
+| `human_idle_blocked` | Legacy alias for `human_idle_unavailable`. | Retained so old rewards and logs remain comparable; do not sum the aliases. |
 | `human_idle_choice` | Ticks deliberately spent pausing, hesitating, safety-holding, or disengaged. | Human-policy choice rather than lack of an executable task. |
-| `proximity_violations` | Robot action entered the simulator's hand-proximity threshold (`L∞ ≤ 1.5` voxels). | A proximity proxy, not a physical collision. |
+| `proximity_violations` | The robot/human hand pair entered the simulator's proximity threshold (`L∞ ≤ 1.5` voxels). | A proximity proxy, not a physical collision. |
+| `proximity_duration_ticks` | Continuous time during which the hand points satisfy `L∞ ≤ 1.5` voxels. | Duration may be fractional because crossings are solved between ticks. |
+| `hand_voxel_overlap_events` | Number of entries where the two continuous hand-anchor positions map to the same nearest, grid-clipped voxel. | Stricter co-occupancy proxy; still not a physical collision. |
+| `hand_voxel_overlap_duration_ticks` | Continuous time during which both hand anchors map to the same voxel. | Uses the single human hand anchor, not the human channel's `2×2×1` display blob. |
 | `safety_violations` | Compatibility alias for `proximity_violations`. | Prefer the new name in analysis. |
 | `invalid_robot_actions` | Robot selections rejected by physical, graph, or allocation validity. | In masked training this should be zero unless callers bypass the mask. |
 | `failed_actions` | Action began but failed at completion, such as occupied placement or stochastic attach error. | Distinct from an invalid action that never began. |
 | `parts_placed` | Parts at their declared targets at episode end. | Progress diagnostic. |
 | `joints_done` | Completed joints at episode end. | Progress diagnostic. |
 | `robot_tasks` / `human_tasks` | Successful target placements and attachments completed by each agent. | Work-allocation diagnostic; not time or effort. |
+
+The simulator does not model bodies, contact dynamics, or hand volumes, so a
+physical collision metric is unavailable. Record it as `NA`, not `0`.
+`proximity_violations` and `proximity_duration_ticks` are the available safety
+proxies, supplemented by the stricter `hand_voxel_overlap_*` co-occupancy
+diagnostic. Hoffman's functional delay (F-DEL) is also not emitted: applying it to
+this asynchronous multi-action task requires a preregistered rule pairing one
+agent's completed action with the teammate's subsequent action.
+
+The safety calculations operate on continuous piecewise-linear hand routes.
+For proximity, every route segment is solved analytically for intervals inside
+the Chebyshev threshold. For voxel overlap, segments are split at route corners
+and nearest-voxel boundaries; each resulting interval is classified by its
+midpoint. Entry counts merge continuous intervals across tick boundaries, and
+duration sums their exact (possibly fractional) lengths. Boundary-only voxel
+coincidences have no stable occupancy and are excluded. The manifest records
+`continuous-hand-chebyshev-events-v1` and
+`rounded-clipped-hand-anchor-cooccupancy-v1` so pooled runs cannot silently mix
+different definitions.
+
+Overlap entries are added to the per-decision reward event window, but the
+built-in rewards do not assign them a separate weight. A task-specific
+`RewardModel` can opt in without changing the global metric definition.
 
 Because the engine is non-interruptible, simulation results should report
 `human_blocked_attempts`, not claim workflow interruptions. Real-robot P7
@@ -246,7 +281,8 @@ equated with this counter.
 
 ## 11. Derived scores
 
-Current fluency proxy:
+Legacy custom fluency proxy (not one of Hoffman's objective measures and not a
+replacement for the raw H-IDLE/R-IDLE/C-ACT measures):
 
 ```text
 idle_fraction = min(1, human_idle_blocked / ticks)

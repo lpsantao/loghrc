@@ -148,11 +148,20 @@ manifest, episode-log schema, metric definitions, and reproduction checklist.
 |---|---|
 | `success` | Declarative goal reached before the tick limit. |
 | `ticks` | Total simulator ticks. |
+| `human_idle_ticks` / `human_idle_rate` | Ticks/episode fraction where the human has no perceptible action (Hoffman's H-IDLE operationalization). |
+| `robot_idle_ticks` / `robot_idle_rate` | Ticks/episode fraction where the robot has no perceptible action (R-IDLE). |
+| `concurrent_activity_ticks` / `concurrent_activity_rate` | Ticks/episode fraction where both agents are perceptibly active (C-ACT). |
+| `coordination_conflicts` | Action starts rejected because the other agent holds/reserves the same part or occupies the required workspace; counts either agent. |
 | `human_blocked_attempts` | Human action-start attempts rejected as unavailable. |
 | `human_interruptions` | Started human actions later aborted; expected to be zero while actions remain non-interruptible. |
-| `human_idle_blocked` | Ticks with no currently executable human task; not automatically attributable to the robot. |
+| `human_idle_unavailable` | Ticks with no currently executable human task; not automatically attributable to the robot. |
+| `human_idle_robot_blocked` | Conservative subset of unavailable ticks with direct evidence of a robot-held/reserved resource, robot-owned unmet dependency, or robot workspace occupancy. |
+| `human_idle_blocked` | Legacy alias for `human_idle_unavailable`, retained for reward and log compatibility. |
 | `human_idle_choice` | Deliberate pause, hesitation, safety hold, or disengagement ticks. |
 | `proximity_violations` | Robot/human hand proximity threshold crossings; not physical collisions. |
+| `proximity_duration_ticks` | Continuous simulator time spent inside the hand-proximity threshold. |
+| `hand_voxel_overlap_events` | Entries where both continuous hand-anchor positions map to the same nearest voxel. |
+| `hand_voxel_overlap_duration_ticks` | Continuous simulator time for which both hand anchors map to the same voxel. |
 | `invalid_robot_actions` | Robot actions rejected by physics, graph, or allocation. |
 | `failed_actions` | Actions that started but failed when completing. |
 
@@ -160,6 +169,31 @@ manifest, episode-log schema, metric definitions, and reproduction checklist.
 `human_blocked_attempts`; do not add them together. `safety_violations` is the
 compatibility name for `proximity_violations`. Raw metrics are the primary
 outcomes; composite fluency/symbiosis scores are secondary summaries.
+
+Physical collisions are **not modelled**: hands are points and there is no
+body/contact dynamics. Report collision count as unavailable (`NA`), never as
+zero. `proximity_violations` is the broad safety proxy;
+`hand_voxel_overlap_*` is a stricter discrete co-occupancy proxy, still not a
+physical collision.
+
+### How proximity and same-voxel overlap are calculated
+
+Both measures use the continuous piecewise-linear hand routes, including
+crossings between integer ticks. Proximity holds whenever the per-axis maximum
+distance between the hand points is at most `1.5` voxels. An event is counted
+on entry; the duration field integrates all time inside the threshold.
+
+For same-voxel overlap, each continuous hand point is independently rounded to
+its nearest integer voxel and clipped to the grid bounds, matching the engine's
+voxel projection. An event is counted when the two hand-anchor voxel indices
+become equal; duration integrates the time until they differ. A coincidence
+only at an exact rounding boundary has zero stable occupancy and is excluded
+from overlap duration/events, while the continuous proximity detector still
+captures the contact. The human's `2×2×1` observation blob is only a visible
+state representation: overlap uses the human hand's single anchor voxel, not
+the whole blob. Neither overlap metric currently adds a separate reward term.
+Overlap-entry events are nevertheless exposed to pluggable task-specific
+reward models, which may opt in explicitly.
 
 Validate any task (including randomized-layout dry runs):
 
