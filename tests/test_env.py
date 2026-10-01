@@ -218,7 +218,11 @@ def test_aggregate_index(tmp_path):
     assert summary["episodes"] == 2
     assert summary["success_rate"] == 1.0
     assert summary["mean_ticks"] > 0
+    assert summary["mean_successful_completion_ticks"] == summary["mean_ticks"]
+    assert summary["mean_min_hand_distance_linf"] >= 0
     assert 0.0 < summary["mean_fluency"] <= 1.0
+    assert 0.0 <= summary["mean_symbiosis_score_v1"] <= 1.0
+    assert 0.0 <= summary["mean_symbiosis_score_v2"] <= 1.0
 
 
 def test_episode_log_records_resolved_reward(tmp_path):
@@ -255,15 +259,19 @@ def test_metrics_summary_keys():
     success, info = run_scripted(env, seed=11)
     m = info["episode_metrics"]
     for key in ("success", "ticks", "conflicts", "coordination_conflicts",
-                "proximity_violations", "hand_voxel_overlap_events",
+                "proximity_violations", "min_hand_distance_linf",
+                "physical_collisions", "hand_voxel_overlap_events",
                 "hand_voxel_overlap_duration_ticks", "human_idle_blocked",
                 "human_idle_unavailable", "human_idle_robot_blocked",
                 "human_idle_choice", "human_blocked_attempts",
                 "human_interruptions", "human_idle_ticks", "robot_idle_ticks",
                 "concurrent_activity_ticks", "human_idle_rate",
-                "robot_idle_rate", "concurrent_activity_rate"):
+                "robot_idle_rate", "concurrent_activity_rate",
+                "successful_completion_ticks", "symbiosis_score_v1",
+                "symbiosis_score_v2"):
         assert key in m
-    assert "collisions" not in m  # contact dynamics are not modelled
+    assert m["physical_collisions"] is None  # contact dynamics are not modelled
+    assert m["successful_completion_ticks"] == m["ticks"]
     assert m["human_idle_unavailable"] == m["human_idle_blocked"]
     assert m["human_interruptions"] == 0  # operations are non-interruptible
     assert m["ticks"] > 0

@@ -98,6 +98,15 @@ def test_symbiosis_accepts_current_and_legacy_safety_keys(key):
     assert symbiosis_score(metrics) == pytest.approx(1 / 1.2)
 
 
+def test_symbiosis_v2_uses_robot_activity_and_proximity_exposure():
+    from loghrc.core.metrics import symbiosis_score_v2
+    metrics = dict(success=True, ticks=10, robot_idle_rate=.2,
+                   proximity_duration_ticks=2)
+    assert symbiosis_score_v2(metrics) == pytest.approx(.8 / 1.2)
+    metrics["success"] = False
+    assert symbiosis_score_v2(metrics) == 0
+
+
 @pytest.mark.parametrize("horizon,verb", [(1, "pick"), (4, "place_target")])
 def test_replay_preserves_in_flight_timeout(horizon, verb):
     from loghrc.core.replay import Replay

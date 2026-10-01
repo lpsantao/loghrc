@@ -24,14 +24,30 @@ def fluency_score(m: dict) -> float:
     return (1.0 - idle_frac) * event_term
 
 
-def symbiosis_score(m: dict) -> float:
-    """(TSR x fluency) / (proximity-violation rate + 1)."""
+def symbiosis_score_v1(m: dict) -> float:
+    """Legacy composite using blocked-idle fluency and proximity entries."""
 
     tsr = 1.0 if m["success"] in (True, "True", 1, "1") else 0.0
     ticks = max(1, int(m["ticks"]))
     proximity_rate = int(m["proximity_violations"] if "proximity_violations" in m
                          else m["safety_violations"]) / ticks
     return (tsr * fluency_score(m)) / (proximity_rate + 1.0)
+
+
+def symbiosis_score_v2(m: dict) -> float:
+    """Activity/exposure composite using R-IDLE and proximity duration."""
+
+    success = 1.0 if m["success"] in (True, "True", 1, "1") else 0.0
+    ticks = max(1, int(m["ticks"]))
+    robot_idle_rate = float(m["robot_idle_rate"])
+    proximity_duration_rate = float(m["proximity_duration_ticks"]) / ticks
+    return (success * (1.0 - robot_idle_rate)) / (1.0 + proximity_duration_rate)
+
+
+def symbiosis_score(m: dict) -> float:
+    """Compatibility alias for :func:`symbiosis_score_v1`."""
+
+    return symbiosis_score_v1(m)
 
 
 def aggregate_index(run_dir: str | Path) -> dict[str, float]:
@@ -70,13 +86,19 @@ def aggregate_index(run_dir: str | Path) -> dict[str, float]:
         "mean_interruptions": mean(as_int(r, "human_interruptions") for r in rows),
         "mean_invalid": mean(as_int(r, "invalid_robot_actions") for r in rows),
         "mean_fluency": mean(fluency_score(r) for r in rows),
-        "mean_symbiosis": mean(symbiosis_score(r) for r in rows),
+        "mean_symbiosis": mean(symbiosis_score_v1(r) for r in rows),
+        "mean_symbiosis_score_v1": mean(symbiosis_score_v1(r) for r in rows),
     }
+    successful_ticks = [as_int(row, "ticks") for row in rows
+                        if row["success"] in ("True", "1")]
+    if successful_ticks:
+        result["mean_successful_completion_ticks"] = mean(successful_ticks)
     for field in (
         "coordination_conflicts", "human_idle_unavailable",
         "human_idle_robot_blocked", "human_idle_rate", "robot_idle_rate",
         "concurrent_activity_rate", "proximity_duration_ticks",
         "hand_voxel_overlap_events", "hand_voxel_overlap_duration_ticks",
+        "min_hand_distance_linf", "symbiosis_score_v2",
     ):
         value = optional_mean(field)
         if value is not None:

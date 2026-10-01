@@ -79,6 +79,39 @@ def encounters(frame, threshold=1.5):
     return merge(intervals)
 
 
+def minimum_chebyshev_distance(frame):
+    """Exact minimum L-infinity distance between hand anchors in one tick."""
+    splits = sorted(set([0., 1., *knots(frame['actions'][0]),
+                         *knots(frame['actions'][1])]))
+    best = math.inf
+    for left, right in zip(splits, splits[1:]):
+        relative_start = [x-y for x, y in zip(position(frame, 0, left),
+                                             position(frame, 1, left))]
+        relative_end = [x-y for x, y in zip(position(frame, 0, right),
+                                           position(frame, 1, right))]
+        # The Chebyshev distance is the maximum of six affine functions.
+        # Its minimum occurs at a segment endpoint or line intersection.
+        lines = [
+            (sign * start, sign * (end - start))
+            for start, end in zip(relative_start, relative_end)
+            for sign in (-1, 1)
+        ]
+        candidates = {0., 1.}
+        for index, (offset_a, slope_a) in enumerate(lines):
+            for offset_b, slope_b in lines[index + 1:]:
+                denominator = slope_a - slope_b
+                if abs(denominator) <= 1e-12:
+                    continue
+                fraction = (offset_b - offset_a) / denominator
+                if 0. <= fraction <= 1.:
+                    candidates.add(fraction)
+        for fraction in candidates:
+            distance = max(abs(start + fraction * (end - start))
+                           for start, end in zip(relative_start, relative_end))
+            best = min(best, distance)
+    return best
+
+
 def hand_voxel(position, grid_size):
     """Map a continuous hand anchor to the observation grid's nearest voxel."""
     return tuple(

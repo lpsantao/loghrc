@@ -29,7 +29,13 @@ from loghrc.core.config import (
 )
 from loghrc.core.geometry import boxes_overlap, pos_along_path
 from loghrc.core.goal import default_goal
-from loghrc.core.proximity import encounters, hand_voxel, position, voxel_overlaps
+from loghrc.core.proximity import (
+    encounters,
+    hand_voxel,
+    minimum_chebyshev_distance,
+    position,
+    voxel_overlaps,
+)
 from loghrc.core.labels import part_class_manifest, part_class_name
 from loghrc.core.observation import ChannelLayout, build_observation
 from loghrc.core.provenance import component_spec, fingerprint, runtime_manifest, source_manifest
@@ -41,6 +47,7 @@ from loghrc.core.reward import (
     resolved_reward_hash,
     reward_spec,
 )
+from loghrc.core.metrics import symbiosis_score_v1, symbiosis_score_v2
 
 
 @dataclass
@@ -252,6 +259,10 @@ class LogHrcEnv(gym.Env):
             ROBOT: AgentState(hand=self._f(self.config.home_robot)),
             HUMAN: AgentState(hand=self._f(self.config.home_human)),
         }
+        self._min_hand_distance_linf = max(
+            abs(robot - human)
+            for robot, human in zip(self.agents[ROBOT].hand, self.agents[HUMAN].hand)
+        )
 
         from loghrc.humans.pools import POOLS, sample_profile
         from loghrc.humans.scripted import HumanProfile, ScriptedPolicy
@@ -565,6 +576,8 @@ class LogHrcEnv(gym.Env):
             })
         frame = {"t": self.t, "hands": [self.agents[a].hand for a in (ROBOT, HUMAN)],
                  "actions": actions}
+        self._min_hand_distance_linf = min(
+            self._min_hand_distance_linf, minimum_chebyshev_distance(frame))
         intervals = encounters(frame)
         for start, end in intervals:
             self._proximity_duration += end - start
@@ -709,14 +722,17 @@ class LogHrcEnv(gym.Env):
     def metrics_summary(self, success: bool) -> dict[str, Any]:
         c = self.counters
         ticks = max(1, self.t)
-        return {
+        metrics = {
             "success": bool(success),
             "ticks": self.t,
+            "successful_completion_ticks": self.t if success else None,
             "conflicts": c.conflicts,
             "coordination_conflicts": c.coordination_conflicts,
             "safety_violations": c.safety_violations,
             "proximity_violations": c.safety_violations,
             "proximity_duration_ticks": self._proximity_duration,
+            "min_hand_distance_linf": self._min_hand_distance_linf,
+            "physical_collisions": None,
             "hand_voxel_overlap_events": c.hand_voxel_overlap_events,
             "hand_voxel_overlap_duration_ticks": self._voxel_overlap_duration,
             "invalid_robot_actions": c.invalid_robot,
@@ -741,6 +757,9 @@ class LogHrcEnv(gym.Env):
             "robot_tasks": c.robot_tasks,
             "human_tasks": c.human_tasks,
         }
+        metrics["symbiosis_score_v1"] = symbiosis_score_v1(metrics)
+        metrics["symbiosis_score_v2"] = symbiosis_score_v2(metrics)
+        return metrics
 
     def episode_record(self) -> dict[str, Any]:
         """Full record for the episode logger (header + events + footer)."""
@@ -804,11 +823,13 @@ class LogHrcEnv(gym.Env):
         identity = {
             "schema": 1,
             "interaction_semantics": "journal-v2",
-            "metric_semantics": "hrc-metrics-v2",
+            "metric_semantics": "hrc-metrics-v3",
             "proximity_semantics": "continuous-hand-chebyshev-events-v1",
             "proximity_threshold_voxels": 1.5,
             "collision_semantics": "not-modeled",
             "activity_semantics": "perceptible-action-ticks-v1",
+            "minimum_distance_semantics": "continuous-hand-chebyshev-minimum-v1",
+            "symbiosis_semantics": ["symbiosis-v1", "symbiosis-v2"],
             "hand_voxel_overlap_semantics": "rounded-clipped-hand-anchor-cooccupancy-v1",
             "task_hash": self.config.task_hash(),
             "task": self.config.name,

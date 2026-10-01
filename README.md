@@ -148,6 +148,7 @@ manifest, episode-log schema, metric definitions, and reproduction checklist.
 |---|---|
 | `success` | Declarative goal reached before the tick limit. |
 | `ticks` | Total simulator ticks. |
+| `successful_completion_ticks` | Completion time in ticks for a successful episode; `null` for a failure or timeout. |
 | `human_idle_ticks` / `human_idle_rate` | Ticks/episode fraction where the human has no perceptible action (Hoffman's H-IDLE operationalization). |
 | `robot_idle_ticks` / `robot_idle_rate` | Ticks/episode fraction where the robot has no perceptible action (R-IDLE). |
 | `concurrent_activity_ticks` / `concurrent_activity_rate` | Ticks/episode fraction where both agents are perceptibly active (C-ACT). |
@@ -160,10 +161,14 @@ manifest, episode-log schema, metric definitions, and reproduction checklist.
 | `human_idle_choice` | Deliberate pause, hesitation, safety hold, or disengagement ticks. |
 | `proximity_violations` | Robot/human hand proximity threshold crossings; not physical collisions. |
 | `proximity_duration_ticks` | Continuous simulator time spent inside the hand-proximity threshold. |
+| `min_hand_distance_linf` | Minimum continuous Chebyshev (`L∞`) distance between the two hand anchors, in voxels. |
+| `physical_collisions` | Always `null`/`NA`: body and contact dynamics are not modelled. |
 | `hand_voxel_overlap_events` | Entries where both continuous hand-anchor positions map to the same nearest voxel. |
 | `hand_voxel_overlap_duration_ticks` | Continuous simulator time for which both hand anchors map to the same voxel. |
 | `invalid_robot_actions` | Robot actions rejected by physics, graph, or allocation. |
 | `failed_actions` | Actions that started but failed when completing. |
+| `symbiosis_score_v1` | Legacy success/blocked-idle/proximity-entry composite; see `EXPERIMENT_TRACKING.md`. |
+| `symbiosis_score_v2` | Success/robot-activity/proximity-exposure composite; see `EXPERIMENT_TRACKING.md`. |
 
 `conflicts` is currently the compatibility name for the same events as
 `human_blocked_attempts`; do not add them together. `safety_violations` is the
@@ -182,6 +187,8 @@ Both measures use the continuous piecewise-linear hand routes, including
 crossings between integer ticks. Proximity holds whenever the per-axis maximum
 distance between the hand points is at most `1.5` voxels. An event is counted
 on entry; the duration field integrates all time inside the threshold.
+`min_hand_distance_linf` analytically minimizes that same per-axis maximum
+distance over every route segment; it does not sample only integer ticks.
 
 For same-voxel overlap, each continuous hand point is independently rounded to
 its nearest integer voxel and clipped to the grid bounds, matching the engine's

@@ -229,6 +229,7 @@ https://doi.org/10.1109/THMS.2019.2904558).
 |---|---|---|
 | `success` | Declarative goal satisfied before `max_ticks`. | Task success, not policy optimality. |
 | `ticks` | Number of simulator ticks elapsed. | Primary completion-efficiency measure among successful episodes. |
+| `successful_completion_ticks` | `ticks` when the episode succeeds; `NA` otherwise. | Allows completion efficiency to be averaged without mixing in timeout durations. |
 | `human_idle_ticks` / `human_idle_rate` | Ticks, and fraction of episode ticks, where the human has no perceptible action. | Operationalization of Hoffman H-IDLE; it includes every cause of human inactivity. |
 | `robot_idle_ticks` / `robot_idle_rate` | Ticks, and fraction of episode ticks, where the robot has no perceptible action. | Operationalization of Hoffman R-IDLE. |
 | `concurrent_activity_ticks` / `concurrent_activity_rate` | Ticks, and fraction of episode ticks, where both agents have perceptible actions. | Operationalization of Hoffman C-ACT; a team measure, not a human-only measure. |
@@ -242,6 +243,8 @@ https://doi.org/10.1109/THMS.2019.2904558).
 | `human_idle_choice` | Ticks deliberately spent pausing, hesitating, safety-holding, or disengaged. | Human-policy choice rather than lack of an executable task. |
 | `proximity_violations` | The robot/human hand pair entered the simulator's proximity threshold (`L∞ ≤ 1.5` voxels). | A proximity proxy, not a physical collision. |
 | `proximity_duration_ticks` | Continuous time during which the hand points satisfy `L∞ ≤ 1.5` voxels. | Duration may be fractional because crossings are solved between ticks. |
+| `min_hand_distance_linf` | Minimum continuous `L∞` distance between hand anchors over the episode, in voxels. | Safety clearance proxy; not body clearance or collision distance. |
+| `physical_collisions` | `NA`. | Bodies, volumes, and contact dynamics are not modelled; never encode this as zero. |
 | `hand_voxel_overlap_events` | Number of entries where the two continuous hand-anchor positions map to the same nearest, grid-clipped voxel. | Stricter co-occupancy proxy; still not a physical collision. |
 | `hand_voxel_overlap_duration_ticks` | Continuous time during which both hand anchors map to the same voxel. | Uses the single human hand anchor, not the human channel's `2×2×1` display blob. |
 | `safety_violations` | Compatibility alias for `proximity_violations`. | Prefer the new name in analysis. |
@@ -287,15 +290,34 @@ replacement for the raw H-IDLE/R-IDLE/C-ACT measures):
 ```text
 idle_fraction = min(1, human_idle_blocked / ticks)
 event_term = 1 / (1 + conflicts + human_interruptions)
-fluency = (1 - idle_fraction) * event_term
+fluency_v1 = (1 - idle_fraction) * event_term
 ```
 
-Current symbiosis proxy:
+Symbiosis score v1 preserves the original custom proxy:
 
 ```text
 proximity_rate = proximity_violations / ticks
-symbiosis = (task_success * fluency) / (1 + proximity_rate)
+symbiosis_v1 = (task_success * fluency_v1) / (1 + proximity_rate)
 ```
+
+It is calculated per episode. `task_success` is `1` for a completed episode and
+`0` otherwise, so failed episodes score zero. `human_idle_blocked` is the legacy
+unavailability counter and `conflicts` is the legacy human rejected-start
+counter. The run-level value is the mean of episode scores.
+
+Symbiosis score v2 uses the directly measured robot activity and continuous
+proximity exposure:
+
+```text
+robot_activity = 1 - robot_idle_rate
+proximity_duration_rate = proximity_duration_ticks / ticks
+symbiosis_v2 = (task_success * robot_activity) / (1 + proximity_duration_rate)
+```
+
+It is also calculated per episode and averaged across episodes. A failed
+episode scores zero. Physical collisions are not substituted with zero: v1 and
+v2 explicitly use proximity proxies because collision dynamics are unavailable.
+Both versions are logged; neither replaces the raw primary outcomes.
 
 These scores are convenient summaries, not validated psychological constructs.
 Report success, time, idle, conflicts/blocked attempts, and proximity violations

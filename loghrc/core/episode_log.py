@@ -21,9 +21,10 @@ import gymnasium as gym
 INDEX_FIELDS = [
     "episode", "file", "config", "task_hash", "experiment_hash", "phase",
     "constraint_mode", "invalid_action_penalty", "profile", "reward_hash", "seed",
-    "success", "ticks", "reward",
+    "success", "ticks", "successful_completion_ticks", "reward",
     "conflicts", "coordination_conflicts",
     "safety_violations", "proximity_violations", "proximity_duration_ticks",
+    "min_hand_distance_linf", "physical_collisions",
     "hand_voxel_overlap_events", "hand_voxel_overlap_duration_ticks",
     "invalid_robot_actions",
     "human_idle_blocked", "human_idle_unavailable", "human_idle_robot_blocked",
@@ -32,6 +33,7 @@ INDEX_FIELDS = [
     "human_idle_ticks", "robot_idle_ticks", "concurrent_activity_ticks",
     "human_idle_rate", "robot_idle_rate", "concurrent_activity_rate",
     "failed_actions", "joints_done", "parts_placed", "robot_tasks", "human_tasks",
+    "symbiosis_score_v1", "symbiosis_score_v2",
 ]
 
 

@@ -1,6 +1,11 @@
 """Continuous detection including crossings hidden between integer ticks."""
 import pytest
-from loghrc.core.proximity import encounters, hand_voxel, voxel_overlaps
+from loghrc.core.proximity import (
+    encounters,
+    hand_voxel,
+    minimum_chebyshev_distance,
+    voxel_overlaps,
+)
 from loghrc.core.env import ActiveAction
 from test_journal_interaction import make_env
 from loghrc.core.config import ROBOT, HUMAN
@@ -25,6 +30,13 @@ def test_two_encounters_within_one_tick():
 def test_tangent_contact_has_zero_duration_but_one_encounter():
     intervals = encounters(frame([(-3, 0, 0), (0, 3, 0)]))
     assert intervals == [[.5, .5]]
+
+
+def test_minimum_chebyshev_distance_is_continuous_between_ticks():
+    assert minimum_chebyshev_distance(
+        frame([(-5, 2, 0), (5, 2, 0)])) == pytest.approx(2)
+    assert minimum_chebyshev_distance(
+        frame([(-5, 0, 0), (5, 0, 0)])) == pytest.approx(0)
 
 
 def test_same_voxel_overlap_is_continuous_between_integer_ticks():
@@ -54,6 +66,7 @@ def test_live_same_voxel_counts_entries_and_duration():
     metrics = env.metrics_summary(False)
     assert metrics['hand_voxel_overlap_events'] == 2
     assert metrics['hand_voxel_overlap_duration_ticks'] == pytest.approx(3)
+    assert metrics['min_hand_distance_linf'] == pytest.approx(0.4)
     assert len([e for e in env.events if e['type'] == 'hand_voxel_overlap']) == 2
     env.reset(seed=0)
     assert env.metrics_summary(False)['hand_voxel_overlap_duration_ticks'] == 0
