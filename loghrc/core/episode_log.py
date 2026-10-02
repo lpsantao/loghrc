@@ -33,6 +33,10 @@ INDEX_FIELDS = [
     "human_idle_ticks", "robot_idle_ticks", "concurrent_activity_ticks",
     "human_idle_rate", "robot_idle_rate", "concurrent_activity_rate",
     "failed_actions", "joints_done", "parts_placed", "robot_tasks", "human_tasks",
+    "preferred_operations_total", "human_preferred_operations",
+    "robot_preference_intrusions", "complement_operations_total",
+    "robot_complement_operations", "human_preference_adherence",
+    "robot_intrusion_rate", "robot_complement_share",
     "symbiosis_score_v1", "symbiosis_score_v2",
 ]
 

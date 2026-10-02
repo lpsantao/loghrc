@@ -8,7 +8,7 @@ from loghrc.core.env import LogHrcEnv
 from loghrc.core import physics
 from loghrc.constraints.graph import DefaultTaskGraph
 from loghrc.humans.scripted import HumanProfile, ScriptedPolicy
-from loghrc.humans.profiles.furniture import journal_profiles
+from loghrc.humans.profiles.furniture import journal_profiles, p0_profiles
 from loghrc.humans.pools import sample_profile
 from loghrc.tasks import two_leg_table_config, full_table_config
 from loghrc.tasks.furniture.table import journal_furniture_config
@@ -124,6 +124,79 @@ def test_profile_sampling_balances_families_not_variant_count():
     draws = [sample_profile(rng,pool=pool).family for _ in range(3000)]
     for family in ('proactive','wait_initiative','prefer_scope'):
         assert 0.29 < draws.count(family)/len(draws) < 0.38
+
+
+@pytest.mark.parametrize('config_fn', [two_leg_table_config, full_table_config])
+def test_p0_phase2_profiles_have_disjoint_strict_scopes(config_fn):
+    config = config_fn()
+    profiles = p0_profiles(config, phase=2)
+    legs = tuple(g.name for g in config.groups if g.name.startswith('leg'))
+    split = len(legs) // 2
+    assert set(profiles) == {
+        'proactive_scope_a', 'wait_scope_a',
+        'proactive_scope_b', 'wait_scope_b',
+    }
+    assert profiles['proactive_scope_a'].group_scope == legs[:split]
+    assert profiles['wait_scope_a'].group_scope == legs[:split]
+    assert profiles['proactive_scope_b'].group_scope == legs[split:]
+    assert profiles['wait_scope_b'].group_scope == legs[split:]
+    assert set(legs[:split]).isdisjoint(legs[split:])
+
+
+def test_p0_scope_does_not_leak_into_mask_or_observation():
+    config = journal_furniture_config(two_leg_table_config())
+    pool = p0_profiles(config, phase=2)
+    envs = [
+        LogHrcEnv(config=config, phase=2, profile_pool=pool,
+                  human_profile=name, graph=DefaultTaskGraph(False))
+        for name in ('proactive_scope_a', 'proactive_scope_b')
+    ]
+    observations = [env.reset(seed=12)[0] for env in envs]
+    for key in ('voxels', 'joints'):
+        np.testing.assert_array_equal(observations[0][key], observations[1][key])
+    np.testing.assert_array_equal(envs[0].action_masks(), envs[1].action_masks())
+
+
+def test_p0_preference_metrics_classify_successful_operations():
+    config = journal_furniture_config(two_leg_table_config())
+    pool = p0_profiles(config, phase=2)
+    env = LogHrcEnv(config=config, phase=2, profile_pool=pool,
+                    human_profile='proactive_scope_a', graph=DefaultTaskGraph(False))
+    env.reset(seed=0)
+    scope = env.human_profile.group_scope
+    preferred = next(g for g in env.config.groups if g.name in scope)
+    complement = next(g for g in env.config.groups if g.name not in scope)
+
+    env._task_completed(HUMAN, 'place_target', preferred.part_ids[0])
+    env._task_completed(ROBOT, 'attach', preferred.joint_ids[0])
+    env._task_completed(ROBOT, 'place_target', complement.part_ids[0])
+    metrics = env.metrics_summary(success=False)
+
+    assert metrics['human_preferred_operations'] == 1
+    assert metrics['robot_preference_intrusions'] == 1
+    assert metrics['robot_complement_operations'] == 1
+    assert metrics['human_preference_adherence'] == pytest.approx(
+        1 / metrics['preferred_operations_total'])
+    assert metrics['robot_intrusion_rate'] == pytest.approx(
+        1 / metrics['preferred_operations_total'])
+    assert metrics['robot_complement_share'] == pytest.approx(
+        1 / metrics['complement_operations_total'])
+
+
+def test_p0_flexible_profile_marks_preference_metrics_not_applicable():
+    config = journal_furniture_config(two_leg_table_config())
+    pool = p0_profiles(config, phase=2, held_out=True)
+    env = LogHrcEnv(config=config, phase=2, profile_pool=pool,
+                    human_profile='flexible', graph=DefaultTaskGraph(False))
+    env.reset(seed=0)
+    metrics = env.metrics_summary(success=False)
+    for key in (
+        'preferred_operations_total', 'human_preferred_operations',
+        'robot_preference_intrusions', 'complement_operations_total',
+        'robot_complement_operations', 'human_preference_adherence',
+        'robot_intrusion_rate', 'robot_complement_share',
+    ):
+        assert metrics[key] is None
 
 
 @pytest.mark.parametrize('phase', [1,2])

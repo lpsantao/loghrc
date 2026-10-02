@@ -96,6 +96,9 @@ class _Counters:
     failed_actions: int = 0
     robot_tasks: int = 0   # successful place_target/attach by the robot
     human_tasks: int = 0   # ... by the human (division metric, CASE Phase 2)
+    human_preferred_operations: int = 0
+    robot_preference_intrusions: int = 0
+    robot_complement_operations: int = 0
     human_idle_ticks: int = 0
     robot_idle_ticks: int = 0
     concurrent_activity_ticks: int = 0
@@ -545,7 +548,7 @@ class LogHrcEnv(gym.Env):
                 payload["pose"] = list(dest.as_tuple())
                 if st.at_target:
                     self._window.append({"type": "placed", "agent": agent, "part": act.arg})
-                    self._task_completed(agent)
+                    self._task_completed(agent, act.verb, act.arg)
         elif act.verb == "attach":
             joint = self.config.joint(act.arg)
             ok_now, _ = physics.can_attach(self, agent, joint)
@@ -560,7 +563,7 @@ class LogHrcEnv(gym.Env):
                     self.parts[pid].attached = True
                 payload["joint_done"] = True
                 self._window.append({"type": "joint", "agent": agent, "joint": act.arg})
-                self._task_completed(agent)
+                self._task_completed(agent, act.verb, act.arg)
         # move_home / wait: no state change
         self._log_event({"type": "action_end", "agent": agent, "verb": act.verb,
                          "arg": act.arg, "name": self._arg_name(act.verb, act.arg),
@@ -697,12 +700,33 @@ class LogHrcEnv(gym.Env):
         self._last_decision_t = self.t
         return float(reward)
 
-    def _task_completed(self, agent: int) -> None:
+    def _task_completed(self, agent: int, verb: str, arg: int) -> None:
         if agent == ROBOT:
             self.counters.robot_tasks += 1
         else:
             self.counters.human_tasks += 1
             self.human_policy.on_task_completed(self.np_random)
+
+        scope = self.human_profile.group_scope
+        if scope is None:
+            return
+        group = self._operation_group(verb, arg)
+        if group in scope:
+            if agent == HUMAN:
+                self.counters.human_preferred_operations += 1
+            else:
+                self.counters.robot_preference_intrusions += 1
+        elif agent == ROBOT:
+            self.counters.robot_complement_operations += 1
+
+    def _operation_group(self, verb: str, arg: int) -> str | None:
+        """Return the task group owning a successful place/attach operation."""
+
+        for group in self.config.groups:
+            ids = group.part_ids if verb == "place_target" else group.joint_ids
+            if arg in ids:
+                return group.name
+        return None
 
     # ------------------------------------------------------------------
     # Bookkeeping
@@ -722,6 +746,18 @@ class LogHrcEnv(gym.Env):
     def metrics_summary(self, success: bool) -> dict[str, Any]:
         c = self.counters
         ticks = max(1, self.t)
+        scope = self.human_profile.group_scope
+        preferred_total = None
+        complement_total = None
+        if scope is not None:
+            preferred_total = sum(
+                len(group.part_ids) + len(group.joint_ids)
+                for group in self.config.groups if group.name in scope
+            )
+            complement_total = sum(
+                len(group.part_ids) + len(group.joint_ids)
+                for group in self.config.groups if group.name not in scope
+            )
         metrics = {
             "success": bool(success),
             "ticks": self.t,
@@ -756,6 +792,29 @@ class LogHrcEnv(gym.Env):
             "parts_placed": sum(st.at_target for st in self.parts.values()),
             "robot_tasks": c.robot_tasks,
             "human_tasks": c.human_tasks,
+            "preferred_operations_total": preferred_total,
+            "human_preferred_operations": (
+                None if scope is None else c.human_preferred_operations
+            ),
+            "robot_preference_intrusions": (
+                None if scope is None else c.robot_preference_intrusions
+            ),
+            "complement_operations_total": complement_total,
+            "robot_complement_operations": (
+                None if scope is None else c.robot_complement_operations
+            ),
+            "human_preference_adherence": (
+                None if preferred_total is None or preferred_total == 0
+                else c.human_preferred_operations / preferred_total
+            ),
+            "robot_intrusion_rate": (
+                None if preferred_total is None or preferred_total == 0
+                else c.robot_preference_intrusions / preferred_total
+            ),
+            "robot_complement_share": (
+                None if complement_total is None or complement_total == 0
+                else c.robot_complement_operations / complement_total
+            ),
         }
         metrics["symbiosis_score_v1"] = symbiosis_score_v1(metrics)
         metrics["symbiosis_score_v2"] = symbiosis_score_v2(metrics)
@@ -823,13 +882,14 @@ class LogHrcEnv(gym.Env):
         identity = {
             "schema": 1,
             "interaction_semantics": "journal-v2",
-            "metric_semantics": "hrc-metrics-v3",
+            "metric_semantics": "hrc-metrics-v4",
             "proximity_semantics": "continuous-hand-chebyshev-events-v1",
             "proximity_threshold_voxels": 1.5,
             "collision_semantics": "not-modeled",
             "activity_semantics": "perceptible-action-ticks-v1",
             "minimum_distance_semantics": "continuous-hand-chebyshev-minimum-v1",
             "symbiosis_semantics": ["symbiosis-v1", "symbiosis-v2"],
+            "preference_semantics": "strict-human-group-scope-v1",
             "hand_voxel_overlap_semantics": "rounded-clipped-hand-anchor-cooccupancy-v1",
             "task_hash": self.config.task_hash(),
             "task": self.config.name,
