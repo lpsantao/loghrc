@@ -253,9 +253,24 @@ https://doi.org/10.1109/THMS.2019.2904558).
 | `parts_placed` | Parts at their declared targets at episode end. | Progress diagnostic. |
 | `joints_done` | Completed joints at episode end. | Progress diagnostic. |
 | `robot_tasks` / `human_tasks` | Successful target placements and attachments completed by each agent. | Work-allocation diagnostic; not time or effort. |
+| `preferred_operations_total` | Number of configured placements plus attachments in the active human profile's strict `group_scope`. | Fixed task denominator; `NA` when no strict scope is declared. |
+| `human_preferred_operations` | Successful human placements/attachments whose owning group is in its strict scope. | Raw numerator for preference adherence. |
+| `robot_preference_intrusions` | Successful robot placements/attachments whose owning group is in the human's strict scope. | Taking valid work can still be an undesirable preference intrusion. |
+| `complement_operations_total` | Number of configured placements plus attachments outside the strict human scope. | Includes the board when the board is outside the declared scope. |
+| `robot_complement_operations` | Successful robot placements/attachments outside the human scope. | Raw numerator for robot complement share. |
+| `human_preference_adherence` | `human_preferred_operations / preferred_operations_total`. | Partial episodes retain the full declared denominator; `NA` without a strict scope. |
+| `robot_intrusion_rate` | `robot_preference_intrusions / preferred_operations_total`. | Lower is better only when preference respect is an intended outcome. |
+| `robot_complement_share` | `robot_complement_operations / complement_operations_total`. | `NA` without a strict scope or if the declared complement is empty. |
 
 The simulator does not model bodies, contact dynamics, or hand volumes, so a
 physical collision metric is unavailable. Record it as `NA`, not `0`.
+
+Every successful target placement and attachment has exactly one owning task
+group. Preference counters are updated only on successful completion, not when
+an operation starts or fails. They do not change reward, physics, graph
+validity, or action masks. Profiles without a strict scope produce `NA` for all
+preference fields so absence of a declared preference is never misreported as
+perfect zero intrusion.
 `proximity_violations` and `proximity_duration_ticks` are the available safety
 proxies, supplemented by the stricter `hand_voxel_overlap_*` co-occupancy
 diagnostic. Hoffman's functional delay (F-DEL) is also not emitted: applying it to

@@ -167,6 +167,9 @@ manifest, episode-log schema, metric definitions, and reproduction checklist.
 | `hand_voxel_overlap_duration_ticks` | Continuous simulator time for which both hand anchors map to the same voxel. |
 | `invalid_robot_actions` | Robot actions rejected by physics, graph, or allocation. |
 | `failed_actions` | Actions that started but failed when completing. |
+| `human_preferred_operations` / `preferred_operations_total` | Successful human operations in its strict group scope / all declared operations in that scope. |
+| `robot_preference_intrusions` / `robot_intrusion_rate` | Successful robot operations in the human's strict scope / the preferred-operation total. |
+| `robot_complement_operations` / `robot_complement_share` | Successful robot operations outside the human scope / all declared complement operations. |
 | `symbiosis_score_v1` | Legacy success/blocked-idle/proximity-entry composite; see `EXPERIMENT_TRACKING.md`. |
 | `symbiosis_score_v2` | Success/robot-activity/proximity-exposure composite; see `EXPERIMENT_TRACKING.md`. |
 
@@ -180,6 +183,11 @@ body/contact dynamics. Report collision count as unavailable (`NA`), never as
 zero. `proximity_violations` is the broad safety proxy;
 `hand_voxel_overlap_*` is a stricter discrete co-occupancy proxy, still not a
 physical collision.
+
+Preference metrics apply only when the active human profile declares a strict
+`group_scope`. The board is complementary when it is outside that scope. For a
+profile without a strict scope, including `flexible`, raw preference counts,
+totals, and rates are `null`/`NA`, not zero.
 
 ### How proximity and same-voxel overlap are calculated
 
