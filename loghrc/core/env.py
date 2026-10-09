@@ -246,6 +246,23 @@ class LogHrcEnv(gym.Env):
         self._human_wait_reason = None
         self.events: list[dict[str, Any]] = []
         self._window: list[dict[str, Any]] = []
+        self._profile_switch: dict[str, Any] | None = None
+        self._profile_switch_pending = False
+        self._profile_switch_applied_t: int | None = None
+        self._profile_switch_trigger: dict[str, Any] | None = None
+        self._profile_switch_counter_snapshot: dict[str, int] | None = None
+        self._profile_switch_proximity_snapshot = 0.0
+        self._profile_switch_overlap_snapshot = 0.0
+        self._post_switch_robot_decisions = 0
+        self._post_switch_ticks = 0
+        self._post_switch_return = 0.0
+        self._robot_decision_after_profile_switch = False
+        self._post_switch_human_preferred = 0
+        self._post_switch_robot_intrusions = 0
+        self._post_switch_robot_complement = 0
+        self._post_switch_intrusions_before_complement = 0
+        self._first_post_switch_complement_decision: int | None = None
+        self._first_post_switch_complement_t: int | None = None
 
         if self.randomization is not None:
             self.episode_starts, self.episode_targets = sample_layout(
@@ -267,28 +284,76 @@ class LogHrcEnv(gym.Env):
             for robot, human in zip(self.agents[ROBOT].hand, self.agents[HUMAN].hand)
         )
 
-        from loghrc.humans.pools import POOLS, sample_profile
-        from loghrc.humans.scripted import HumanProfile, ScriptedPolicy
+        from loghrc.humans.scripted import ScriptedPolicy
 
-        profile_arg = (options or {}).get("human_profile", self._profile_arg)
-        if isinstance(profile_arg, HumanProfile):
-            self.human_profile = profile_arg
-        elif profile_arg == "sample":
-            self.human_profile = sample_profile(self.np_random, held_out=self._held_out,
-                                                pool=self._profile_pool)
-        else:
-            merged = {name: p for presets in POOLS.values() for name, p in presets.items()}
-            if isinstance(self._profile_pool, dict):
-                merged.update(self._profile_pool)
-            self.human_profile = merged[profile_arg]
+        options = options or {}
+        profile_arg = options.get("human_profile", self._profile_arg)
+        self.human_profile = self._resolve_profile(profile_arg, allow_sample=True)
+        self._initial_human_profile = self.human_profile
         if self._human_model is not None:
             self.human_policy = self._human_model
         else:
             self.human_policy = ScriptedPolicy(self.human_profile, HUMAN)
         self.human_policy.reset(self.config, self.np_random)
+        self._configure_profile_switch(options.get("profile_switch"))
 
         self._log_event({"type": "episode_start", "profile": self.human_profile.to_dict()})
         return self._observation(), self._info(valid=True, message="reset")
+
+    def _resolve_profile(self, profile_arg: Any, *, allow_sample: bool = False):
+        from loghrc.humans.pools import POOLS, sample_profile
+        from loghrc.humans.scripted import HumanProfile
+
+        if isinstance(profile_arg, HumanProfile):
+            return profile_arg
+        if profile_arg == "sample":
+            if not allow_sample:
+                raise ValueError("profile_switch target_profile cannot be 'sample'")
+            return sample_profile(
+                self.np_random, held_out=self._held_out, pool=self._profile_pool)
+        merged = {name: profile for presets in POOLS.values()
+                  for name, profile in presets.items()}
+        if isinstance(self._profile_pool, dict):
+            merged.update(self._profile_pool)
+        try:
+            return merged[profile_arg]
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"unknown human profile {profile_arg!r}") from exc
+
+    def _configure_profile_switch(self, spec: Any) -> None:
+        if spec is None:
+            return
+        if self._human_model is not None:
+            raise ValueError("profile_switch requires the built-in scripted human")
+        if not isinstance(spec, dict):
+            raise ValueError("profile_switch must be a mapping")
+        if set(spec) != {"target_profile", "after_any_joint"}:
+            raise ValueError(
+                "profile_switch requires exactly target_profile and after_any_joint")
+        names_arg = spec["after_any_joint"]
+        if isinstance(names_arg, str):
+            raise ValueError("after_any_joint must be a non-empty sequence of joint names")
+        try:
+            names = tuple(names_arg)
+        except TypeError as exc:
+            raise ValueError(
+                "after_any_joint must be a non-empty sequence of joint names") from exc
+        if not names or not all(isinstance(name, str) for name in names):
+            raise ValueError("after_any_joint must be a non-empty sequence of joint names")
+        joint_by_name = {joint.name: joint.id for joint in self.config.joints}
+        unknown = sorted(set(names) - set(joint_by_name))
+        if unknown:
+            raise ValueError(f"unknown profile-switch joints: {unknown}")
+        target = self._resolve_profile(spec["target_profile"])
+        group_names = {group.name for group in self.config.groups}
+        unknown_groups = set(target.group_scope or ()) - group_names
+        if unknown_groups:
+            raise ValueError(f"unknown profile groups: {sorted(unknown_groups)}")
+        self._profile_switch = {
+            "target_profile": target,
+            "joint_ids": frozenset(joint_by_name[name] for name in names),
+            "joint_names": tuple(names),
+        }
 
     def step(self, action: int):
         if self._episode_over:
@@ -298,6 +363,9 @@ class LogHrcEnv(gym.Env):
             raise ValueError(f"action {action} outside {self.action_space}")
         verb, arg = self._actions[action]
         self._window = []
+        self._robot_decision_after_profile_switch = self._profile_switch_applied_t is not None
+        if self._robot_decision_after_profile_switch:
+            self._post_switch_robot_decisions += 1
         valid, message = self._start_action(ROBOT, verb, arg)
         if not valid:
             self.counters.invalid_robot += 1
@@ -315,6 +383,8 @@ class LogHrcEnv(gym.Env):
         truncated = (self.t >= self.config.max_ticks) and not terminated
         self._episode_over = terminated or truncated
         reward = self._compute_reward(valid, terminated)
+        if self._robot_decision_after_profile_switch:
+            self._post_switch_return += reward
         info = self._info(valid=valid, message=message)
         if self._episode_over:
             info["episode_metrics"] = self.metrics_summary(success=terminated)
@@ -339,6 +409,8 @@ class LogHrcEnv(gym.Env):
         self.t += 1
 
         human = self.agents[HUMAN]
+        if self._profile_switch_pending and human.action is None:
+            self._apply_profile_switch()
         if human.action is None and not self.is_complete():
             verb, arg, reason = self.human_policy.decide(self, self.np_random)
             if reason != self._human_wait_reason:
@@ -400,6 +472,9 @@ class LogHrcEnv(gym.Env):
             if act is not None and act.remaining <= 0:
                 self.agents[agent_id].action = None
                 self._finish(agent_id, act)
+
+        if self._profile_switch_applied_t is not None:
+            self._post_switch_ticks += 1
 
         if self.is_complete():
             # Episode done mid-tick (e.g. human fastened the last joint):
@@ -707,6 +782,23 @@ class LogHrcEnv(gym.Env):
             self.counters.human_tasks += 1
             self.human_policy.on_task_completed(self.np_random)
 
+        if (verb == "attach" and self._profile_switch is not None
+                and self._profile_switch_applied_t is None
+                and not self._profile_switch_pending
+                and arg in self._profile_switch["joint_ids"]):
+            self._profile_switch_pending = True
+            self._profile_switch_trigger = {
+                "joint_id": arg,
+                "joint_name": self.config.joint(arg).name,
+                "scheduled_t": self.t,
+            }
+            self._log_event({
+                "type": "profile_switch_scheduled",
+                "from_profile": self.human_profile.name,
+                "to_profile": self._profile_switch["target_profile"].name,
+                **self._profile_switch_trigger,
+            })
+
         scope = self.human_profile.group_scope
         if scope is None:
             return
@@ -714,10 +806,43 @@ class LogHrcEnv(gym.Env):
         if group in scope:
             if agent == HUMAN:
                 self.counters.human_preferred_operations += 1
+                if self._profile_switch_applied_t is not None:
+                    self._post_switch_human_preferred += 1
             else:
                 self.counters.robot_preference_intrusions += 1
+                if (self._profile_switch_applied_t is not None
+                        and self._robot_decision_after_profile_switch):
+                    self._post_switch_robot_intrusions += 1
+                    if self._first_post_switch_complement_decision is None:
+                        self._post_switch_intrusions_before_complement += 1
         elif agent == ROBOT:
             self.counters.robot_complement_operations += 1
+            if (self._profile_switch_applied_t is not None
+                    and self._robot_decision_after_profile_switch):
+                self._post_switch_robot_complement += 1
+                if self._first_post_switch_complement_decision is None:
+                    self._first_post_switch_complement_decision = (
+                        self._post_switch_robot_decisions)
+                    self._first_post_switch_complement_t = self.t
+
+    def _apply_profile_switch(self) -> None:
+        target = self._profile_switch["target_profile"]
+        previous = self.human_profile
+        self.human_policy.switch_profile(target, self.config, self.np_random)
+        self.human_profile = target
+        self._profile_switch_pending = False
+        self._profile_switch_applied_t = self.t
+        self._profile_switch_counter_snapshot = vars(self.counters).copy()
+        self._profile_switch_proximity_snapshot = self._proximity_duration
+        self._profile_switch_overlap_snapshot = self._voxel_overlap_duration
+        self._human_wait_reason = None
+        self._log_event({
+            "type": "profile_switch_applied",
+            "from_profile": previous.name,
+            "to_profile": target.name,
+            "scheduled_t": self._profile_switch_trigger["scheduled_t"],
+            "applied_t": self.t,
+        })
 
     def _operation_group(self, verb: str, arg: int) -> str | None:
         """Return the task group owning a successful place/attach operation."""
@@ -747,9 +872,13 @@ class LogHrcEnv(gym.Env):
         c = self.counters
         ticks = max(1, self.t)
         scope = self.human_profile.group_scope
+        scope_changed = (
+            self._profile_switch_applied_t is not None
+            and self._initial_human_profile.group_scope != self.human_profile.group_scope
+        )
         preferred_total = None
         complement_total = None
-        if scope is not None:
+        if scope is not None and not scope_changed:
             preferred_total = sum(
                 len(group.part_ids) + len(group.joint_ids)
                 for group in self.config.groups if group.name in scope
@@ -818,7 +947,61 @@ class LogHrcEnv(gym.Env):
         }
         metrics["symbiosis_score_v1"] = symbiosis_score_v1(metrics)
         metrics["symbiosis_score_v2"] = symbiosis_score_v2(metrics)
+        if self._profile_switch is not None:
+            metrics["profile_switch"] = self._profile_switch_metrics()
         return metrics
+
+    def _profile_switch_metrics(self) -> dict[str, Any] | None:
+        if self._profile_switch is None:
+            return None
+        target = self._profile_switch["target_profile"]
+        result: dict[str, Any] = {
+            "initial_profile": self._initial_human_profile.name,
+            "target_profile": target.name,
+            "identity_control": self._initial_human_profile.name == target.name,
+            "milestone_joint_names": list(self._profile_switch["joint_names"]),
+            "scheduled": self._profile_switch_trigger is not None,
+            "applied": self._profile_switch_applied_t is not None,
+            "trigger": copy.deepcopy(self._profile_switch_trigger),
+            "applied_t": self._profile_switch_applied_t,
+            "pre_switch_counters": copy.deepcopy(self._profile_switch_counter_snapshot),
+            "post_switch": None,
+        }
+        if self._profile_switch_counter_snapshot is None:
+            return result
+
+        counter_delta = {
+            name: getattr(self.counters, name) - value
+            for name, value in self._profile_switch_counter_snapshot.items()
+        }
+        completed_preferred = (
+            self._post_switch_human_preferred + self._post_switch_robot_intrusions)
+        result["post_switch"] = {
+            "ticks": self._post_switch_ticks,
+            "return": self._post_switch_return,
+            "robot_decisions": self._post_switch_robot_decisions,
+            "counters": counter_delta,
+            "proximity_duration_ticks": (
+                self._proximity_duration - self._profile_switch_proximity_snapshot),
+            "hand_voxel_overlap_duration_ticks": (
+                self._voxel_overlap_duration - self._profile_switch_overlap_snapshot),
+            "human_preferred_operations": self._post_switch_human_preferred,
+            "robot_preference_intrusions": self._post_switch_robot_intrusions,
+            "robot_complement_operations": self._post_switch_robot_complement,
+            "completed_preference_adherence": (
+                None if completed_preferred == 0
+                else self._post_switch_human_preferred / completed_preferred
+            ),
+            "robot_decisions_to_first_complement": (
+                self._first_post_switch_complement_decision),
+            "robot_decisions_before_first_complement": (
+                None if self._first_post_switch_complement_decision is None
+                else self._first_post_switch_complement_decision - 1),
+            "first_robot_complement_t": self._first_post_switch_complement_t,
+            "robot_intrusions_before_first_complement": (
+                self._post_switch_intrusions_before_complement),
+        }
+        return result
 
     def episode_record(self) -> dict[str, Any]:
         """Full record for the episode logger (header + events + footer)."""
@@ -844,7 +1027,13 @@ class LogHrcEnv(gym.Env):
                 "allocation": self.allocation,
                 "seed": self._seed_used,
                 "episode_id": self.episode_id,
-                "profile": self.human_profile.to_dict(),
+                "profile": self._initial_human_profile.to_dict(),
+                **({"profile_switch": {
+                    "initial_profile": self._initial_human_profile.name,
+                    "target_profile": self._profile_switch["target_profile"].name,
+                    "milestone_joint_names": list(
+                        self._profile_switch["joint_names"]),
+                }} if self._profile_switch is not None else {}),
                 "part_classes": part_class_manifest(p.cls for p in self.config.parts),
                 "parts": [
                     {"id": p.id, "name": p.name, "cls": part_class_name(p.cls),

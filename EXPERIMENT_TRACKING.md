@@ -49,6 +49,12 @@ environment, rather than only the task defaults:
 The episode seed, sampled profile, randomized poses, and outcome are deliberately
 excluded: those differ between episodes belonging to the same experiment.
 
+A reset-time `profile_switch` scenario is also episode-specific and therefore
+is not part of this construction-time hash. Its initial profile, target profile,
+and milestone names are stored in the episode header. A campaign using switches
+must additionally lock the scenario in its own run manifest and must not use
+`experiment_hash` alone to distinguish switch directions.
+
 ### Episode identity
 
 An episode is identified by the experiment hash plus its seed, worker-specific
@@ -176,6 +182,7 @@ The header stores:
 - goal description, reward configuration/hash, graph, and constraint mode;
 - grid, phase, allocation, reset seed, and environment-local episode id;
 - complete sampled human profile;
+- opt-in profile-switch initial/target profiles and milestone joint names;
 - resolved semantic part-class names and visualization colors;
 - resolved per-episode part starts and targets;
 - joint definitions; and
@@ -196,6 +203,8 @@ All events carry tick `t`.
 | `invalid` | Robot selected an action that could not execute; it became a one-tick no-op. |
 | `conflict` | Human attempted to begin an action that had become unavailable or incompatible. |
 | `safety` | Robot and human hands crossed the configured simulator proximity criterion. |
+| `profile_switch_scheduled` | A configured milestone joint completed; records initial/target profiles and the milestone. |
+| `profile_switch_applied` | The target profile became active after the human was free. |
 | `episode_end` | Termination/truncation outcome and final metrics. |
 
 ### Footer
@@ -204,7 +213,64 @@ The footer stores the final metric dictionary, final pose of every part, and
 final completion state of every joint. `Replay.verify()` checks reconstructed
 poses and joints against this footer.
 
-## 9. Index CSV schema
+## 9. Profile-switch episodes
+
+Profile switching is an opt-in reset feature for hidden-change experiments. A
+configuration has exactly two fields:
+
+```python
+options={
+    "profile_switch": {
+        "target_profile": "proactive_scope_b",
+        "after_any_joint": ["J_top_dowel_1", "J_top_dowel_2"],
+    }
+}
+```
+
+`after_any_joint` is a non-empty sequence of names from the active task
+configuration; the environment resolves IDs from those names. The target must
+be a concrete profile available in the active pool or built-in presets:
+`"sample"` is rejected. Custom human models are also rejected because the
+environment cannot safely infer how to change their state.
+
+The first successful configured joint completion schedules the switch. The
+target profile is applied at the beginning of the first later tick on which the
+human has no active action. No human action is interrupted. Completed work,
+engagement, blocked-state history, counters, and the RNG stream are retained;
+only the scripted profile, group order, and group scope change. Identity
+controls use the same path and event boundaries.
+
+When configured, the final metric dictionary contains `profile_switch` with:
+
+- initial/target profile, milestone names, trigger joint/tick, application tick,
+  and whether this is an identity control;
+- cumulative counters at the application boundary;
+- post-boundary counter deltas, elapsed ticks, return, robot decisions,
+  proximity duration, and same-voxel duration;
+- post-switch human preferred operations, robot preference intrusions, robot
+  complementary operations, and completed-preference adherence;
+- robot decisions to/before the first complementary operation and intrusions
+  before it.
+
+Completed-preference adherence is
+`human preferred / (human preferred + robot intrusions)` using only operations
+completed after the boundary. It is `null` when that denominator is zero.
+
+Counter deltas include every operation completed after the boundary. In
+contrast, gate-specific robot preference/complement counts include only robot
+actions selected after the switch was applied. An action selected before the
+boundary and completed afterward is therefore visible as post-boundary work but
+is not treated as a response to information unavailable when it was selected.
+
+If the human scope actually changes, whole-episode preference totals and rates
+are `null`: there is no single valid whole-episode scope denominator. Their raw
+whole-episode counts still classify each operation under the profile active at
+its completion. Use the nested post-switch fields for change-point analysis.
+The switch metadata never enters the policy observation or action mask.
+The generic index CSV does not flatten these nested fields; switch analyses
+must read the episode footer or a campaign-specific result table.
+
+## 10. Index CSV schema
 
 The index is a filterable one-row-per-episode projection containing:
 
@@ -218,7 +284,7 @@ The index is a filterable one-row-per-episode projection containing:
 Use hashes—not directory names alone—when pooling episodes. Within one claimed
 experimental arm, all rows should share one experiment hash.
 
-## 10. Raw metric definitions
+## 11. Raw metric definitions
 
 Raw counters are primary evidence. Derived composite scores are secondary.
 The H-IDLE/R-IDLE/C-ACT names follow Guy Hoffman, *Evaluating Fluency in
@@ -297,7 +363,7 @@ Because the engine is non-interruptible, simulation results should report
 interruptions are a different operational measure and must not be silently
 equated with this counter.
 
-## 11. Derived scores
+## 12. Derived scores
 
 Legacy custom fluency proxy (not one of Hoffman's objective measures and not a
 replacement for the raw H-IDLE/R-IDLE/C-ACT measures):
@@ -339,7 +405,7 @@ Report success, time, idle, conflicts/blocked attempts, and proximity violations
 separately as primary outcomes. Freeze formulas before final runs and include a
 sensitivity analysis if the composite score supports a thesis claim.
 
-## 12. Minimum final-run checklist
+## 13. Minimum final-run checklist
 
 Before launching an experiment:
 

@@ -113,6 +113,30 @@ both_shorthand = True
 `randomization=None` uses the task's declared defaults; `False` always disables
 it. An explicit `RandomizationConfig` is the recommended choice in final runs.
 
+An episode may opt into one deferred scripted-human profile switch. The switch
+is scheduled by the first successful completion of any named milestone joint
+and is applied only after the human's current action finishes:
+
+```python
+milestones = [
+    joint.name for joint in env.unwrapped.config.joints
+    if joint.name.startswith("J_top_dowel_")
+]
+observation, info = env.reset(seed=7, options={
+    "human_profile": "proactive_scope_a",
+    "profile_switch": {
+        "target_profile": "proactive_scope_b",
+        "after_any_joint": milestones,
+    },
+})
+```
+
+This option requires the built-in scripted human. It preserves completed work,
+engagement, counters, and the random-number stream. Profile metadata remains in
+`info` and episode logs; it is not added to the policy observation or action
+mask. See [EXPERIMENT_TRACKING.md](EXPERIMENT_TRACKING.md#9-profile-switch-episodes)
+for the event and metric contract.
+
 Select a constraint-ablation arm at environment construction:
 
 ```python

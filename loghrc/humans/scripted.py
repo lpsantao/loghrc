@@ -72,6 +72,25 @@ class ScriptedPolicy(HumanModel):
     def reset(self, config: TaskConfig, rng: np.random.Generator) -> None:
         from loghrc.constraints.graph import DefaultTaskGraph
         self._graph = DefaultTaskGraph()
+        self._set_order(config, rng)
+        self.engaged = True
+        self._blocked_streak = 0
+        self._blocked_by_robot = False
+
+    def switch_profile(
+        self,
+        profile: HumanProfile,
+        config: TaskConfig,
+        rng: np.random.Generator,
+    ) -> None:
+        """Change future decisions without resetting episode-local state."""
+
+        if profile == self.profile:
+            return
+        self.profile = profile
+        self._set_order(config, rng)
+
+    def _set_order(self, config: TaskConfig, rng: np.random.Generator) -> None:
         names = [g.name for g in config.groups]
         pref = self.profile.group_order
         if pref == "config":
@@ -89,9 +108,6 @@ class ScriptedPolicy(HumanModel):
             unknown = set(self.profile.group_scope) - set(names)
             if unknown:
                 raise ValueError(f"unknown profile groups: {sorted(unknown)}")
-        self.engaged = True
-        self._blocked_streak = 0
-        self._blocked_by_robot = False
 
     def on_task_completed(self, rng: np.random.Generator) -> None:
         """Called by the env when this agent completes a task (place/attach).
