@@ -53,6 +53,7 @@ _EXPORTS = {
     "list_tasks": "loghrc.tasks",
     "two_leg_table_config": "loghrc.tasks",
     "full_table_config": "loghrc.tasks",
+    "chair_config": "loghrc.tasks",
     "two_block_config": "loghrc.tasks",
     "three_block_linear_config": "loghrc.tasks",
     "three_block_branching_config": "loghrc.tasks",

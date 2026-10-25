@@ -46,8 +46,9 @@ pip install -e ".[render]"  # + matplotlib exporter
 ```python
 import gymnasium as gym
 import loghrc
+import loghrc.tasks  # registers the built-in Gymnasium IDs
 
-env = gym.make("LogHrc-table-v0")          # or two_leg_table / two_block
+env = gym.make("LogHrc-table-v0")          # or chair / two_leg_table / two_block
 obs, info = env.reset(seed=0)
 obs, r, term, trunc, info = env.step(info["action_mask"].argmax())
 ```
@@ -65,6 +66,10 @@ python examples/run_toy_problem.py --config three_block_branching --phase 2
 # Tables
 python examples/run_scripted_table.py --config two_leg --profile fast_eager
 python examples/run_scripted_table.py --config table --profile hesitant --phase 2
+
+# Chair
+python examples/run_scripted_table.py --config chair --profile fast_eager
+python examples/run_scripted_table.py --config chair --profile slow_methodical --phase 2
 
 # Masked-random lower-bound baseline
 python examples/run_random_table.py --config table --episodes 5
@@ -287,6 +292,10 @@ labels, goals, rewards, graph semantics, registration, and validation workflow.
 | `three_block_branching` | 3 | 0 | Fork–join graph: green/yellow → red |
 | `two_leg_table` | 7 | 6 | HRC model set, diagonal two-leg subassembly |
 | `table` | 13 | 12 | HRC model set full table |
+| `chair` | 19 | 20 | HRC model set chair, conservative seat-first graph |
+
+The chair's source mapping, geometry, precedence graph, allocation, and
+complexity derivation are documented in [CHAIR_TASK_SPEC.md](CHAIR_TASK_SPEC.md).
 
 ## Known limitations
 

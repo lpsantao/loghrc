@@ -7,7 +7,7 @@ print metrics, and show how to replay it.
 import argparse
 from dataclasses import replace
 
-from loghrc.tasks import full_table_config, two_leg_table_config
+from loghrc.tasks import chair_config, full_table_config, two_leg_table_config
 from loghrc.configs import ROBOT, RandomizationConfig
 from loghrc.env import LogHrcEnv
 from loghrc.episode_log import EpisodeRecorder
@@ -16,7 +16,7 @@ from loghrc.human import RIGID_ROBOT_PROFILE, PRESETS, HELD_OUT_PRESETS, Scripte
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", choices=["two_leg", "table"], default="table")
+    ap.add_argument("--config", choices=["two_leg", "table", "chair"], default="table")
     ap.add_argument("--profile", default="slow_methodical",
                     choices=sorted({**PRESETS, **HELD_OUT_PRESETS}))
     ap.add_argument("--phase", type=int, choices=[1, 2], default=1)
@@ -29,7 +29,12 @@ def main() -> None:
     ap.add_argument("--outdir", default="runs/scripted_demo")
     args = ap.parse_args()
 
-    config = two_leg_table_config() if args.config == "two_leg" else full_table_config()
+    factories = {
+        "two_leg": two_leg_table_config,
+        "table": full_table_config,
+        "chair": chair_config,
+    }
+    config = factories[args.config]()
     randomization = None
     if args.randomization == "none":
         randomization = False

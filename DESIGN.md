@@ -83,7 +83,8 @@ loghrc/
 - **Phase C: profile axis for assembly-location preference** (pre-build vs
   in-place) + scripted policies that can choose either path; human policy
   graph-optional.
-- **Phase D: chair task, IKEA-calibrated profiles, demo regeneration, docs.**
+- **Phase D:** chair C0 config and docs completed 2026-10-25; chair-specific
+  profiles, frozen training protocol, and reference-demo regeneration remain.
 
 ---
 
@@ -175,7 +176,7 @@ Shelf (54 components) explicitly out of scope.
   (`test_hands_never_inside_placed_parts`).
 
 - Grid dimensions per furniture config, sized to workspace + staging areas
-  (two-leg ≈ 24×24×12 as in prototype; table/chair to be sized on implementation).
+  (table `32×24×12`; chair `40×32×24`).
 - Tick durations per verb and profile ranges — set from pilot runs; documented
   in `configs.py`.
 - Episode cap (`max_steps`) per config.
@@ -192,7 +193,7 @@ imports loghrc. Training stack deliberately stays out of loghrc for now.
 ```
 loghrc/
   configs.py      # labels, Vox/PartSpec/JointSpec, TaskConfig, RewardConfig, RandomizationConfig
-  tasks.py        # task registry (register_task) + built-ins: two_block, two_leg_table, table
+  tasks.py        # task registry + built-ins: blocks, two-leg/full table, chair
   task_graph.py   # physical + procedural predicates; DefaultTaskGraph (pluggable semantics)
   human.py        # HumanProfile (7 axes incl. CASE safety/patience/engagement), ScriptedPolicy, pools
   env.py          # tick engine, verb×part actions, mask, layout randomization, Gymnasium API
@@ -323,4 +324,5 @@ changed env.
 5. `masking.py`, `metrics.py`; `index_<uuid>.csv` writer.
 6. Web viewer + mp4 exporter against the replay engine.
 7. Port CASE training pipeline; CSV logging + `plots.py`; MaskablePPO smoke run on two-leg table.
-8. Chair config; rendering polish.
+8. Chair config and rendering support (completed 2026-10-25; see
+   `CHAIR_TASK_SPEC.md`).

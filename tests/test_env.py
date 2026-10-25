@@ -5,7 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from loghrc.tasks import full_table_config, get_task, list_tasks, two_leg_table_config
+from loghrc.tasks import (
+    chair_config,
+    full_table_config,
+    get_task,
+    list_tasks,
+    two_leg_table_config,
+)
 from loghrc.configs import (
     HUMAN,
     ROBOT,
@@ -52,7 +58,7 @@ def run_scripted(env, seed=0, max_decisions=500):
     return terminated, info
 
 
-@pytest.mark.parametrize("config_fn", [two_leg_table_config, full_table_config])
+@pytest.mark.parametrize("config_fn", [two_leg_table_config, full_table_config, chair_config])
 @pytest.mark.parametrize("profile", ["fast_eager", "slow_methodical", "hesitant"])
 def test_scripted_completion(config_fn, profile):
     env = LogHrcEnv(config=config_fn(), phase=1, human_profile=profile)
@@ -60,19 +66,58 @@ def test_scripted_completion(config_fn, profile):
     assert success, f"scripted run failed: {info['progress']}"
 
 
-def test_scripted_completion_phase2():
-    env = LogHrcEnv(config=two_leg_table_config(), phase=2,
+@pytest.mark.parametrize("config_fn", [two_leg_table_config, chair_config])
+def test_scripted_completion_phase2(config_fn):
+    env = LogHrcEnv(config=config_fn(), phase=2,
                                human_profile="slow_methodical")
     success, info = run_scripted(env, seed=1)
     assert success
 
 
 def test_config_counts():
-    two, four = two_leg_table_config(), full_table_config()
+    two, four, chair = two_leg_table_config(), full_table_config(), chair_config()
     assert len(two.parts) == 7 and len(two.joints) == 6
     assert len(four.parts) == 13 and len(four.joints) == 12
+    assert len(chair.parts) == 19 and len(chair.joints) == 20
     assert two.version_hash() != four.version_hash()
     assert two.version_hash() == two_leg_table_config().version_hash()
+
+
+def test_chair_seat_first_graph_and_complexity():
+    """Freeze the approved C0 chair DAG and its joining-order count."""
+
+    from functools import lru_cache
+
+    config = chair_config()
+    joints = tuple(config.joints)
+    index = {joint.id: i for i, joint in enumerate(joints)}
+    prerequisites = [
+        sum(1 << index[prereq] for prereq in joint.prereq_joints)
+        for joint in joints
+    ]
+
+    @lru_cache(None)
+    def count_orders(done: int) -> int:
+        if done == (1 << len(joints)) - 1:
+            return 1
+        return sum(
+            count_orders(done | (1 << i))
+            for i, required in enumerate(prerequisites)
+            if not done & (1 << i) and not required & ~done
+        )
+
+    assert config.part(1).proc_prereq_joints == (201, 202, 203, 204)
+    assert config.part(15).proc_prereq_joints == (301, 302, 303, 304)
+    assert config.part(16).proc_prereq_joints == (301, 302, 303, 304)
+    assert count_orders(0) == 8_709_120
+
+
+def test_chair_observation_layout():
+    env = LogHrcEnv(config=chair_config())
+    obs, _ = env.reset(seed=0)
+    # Six semantic classes + six target classes + three agent/state channels.
+    assert env.layout.num_channels == 15
+    assert obs.shape == (15, 40, 32, 24)
 
 
 def test_observation_spaces():

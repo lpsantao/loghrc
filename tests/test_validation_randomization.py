@@ -281,8 +281,9 @@ def test_goal_randomization_moves_goal():
     assert len(seen) > 1, "goal never moved across seeds"
 
 
-def test_gymnasium_registration():
-    env = gym.make("LogHrc-two_block-v0")
+@pytest.mark.parametrize("task_name", ["two_block", "chair"])
+def test_gymnasium_registration(task_name):
+    env = gym.make(f"LogHrc-{task_name}-v0")
     obs, info = env.reset(seed=0)
     assert obs.shape[0] > 0
     env.close()
