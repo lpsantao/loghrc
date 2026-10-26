@@ -1,6 +1,6 @@
 # Chair task specification
 
-Status: **C0 simulator task implemented; training protocol not frozen.**
+Status: **C0 simulator task and Phase-2 human population implemented.**
 
 ## 1. Source and abstraction boundary
 
@@ -113,19 +113,47 @@ chosen graph, the chair therefore has 144 times as many valid joining orders,
 These are valid execution orders within one AND-precedence DAG, not 8,709,120
 different product recipes.
 
-## 6. Groups and Phase 1
+## 6. Groups and human population
 
 Groups partition the task into four leg groups, the seat, two back-upright
-groups, two ChairBack groups, and the shared backrest parts. The fixed Phase-1
-allocation is approximately balanced by operation count:
+groups, two ChairBack groups, and the shared backrest parts. The simulator
+retains a fixed Phase-1 allocation for general engine compatibility, but the
+chair experiment intentionally studies **Phase 2 only**. No chair Phase-1
+training population or Phase-1 experimental arm is planned.
+
+The Phase-2 training population crosses four strict task preferences with two
+execution styles (`proactive` and `wait_for_robot`), giving eight profiles:
+
+| Preference | Groups in the strict human scope | Operations |
+|---|---|---:|
+| `left_side` | both left legs, left upright and left ChairBack | 18 |
+| `right_side` | both right legs, right upright and right ChairBack | 18 |
+| `base` | all four leg subassemblies | 24 |
+| `backrest` | both upright/ChairBack chains and shared backrest parts | 14 |
+
+The human never executes outside its strict scope. The robot remains physically
+able to execute any valid operation, but incurs a preference intrusion whenever
+it executes an operation inside the human scope. Workload and availability are
+not identical across semantic preferences: `backrest` becomes available later
+than `base`. Results must therefore be reported by preference family as well as
+in aggregate.
+
+Held-out evaluation contains:
+
+- a slow/hesitant parameter shift for each known preference;
+- two unseen diagonal scopes (`front_left + rear_right` and the converse);
+- an unscoped `flexible` human, for which preference metrics are `NA`.
+
+The old fixed Phase-1 allocation remains approximately balanced by operation
+count and is used only by simulator regression checks:
 
 - robot: left front/rear structures, left upright/ChairBack, seat and shared
   backrest parts;
 - human: corresponding right-side structures.
 
-Phase 2 removes this executor allocation. Chair-specific strict preference
-profiles are intentionally not part of C0; they must be defined and frozen in
-the later chair training protocol rather than inferred from the table profiles.
+Phase 2 removes this executor allocation. The chair profiles are defined by
+`chair_phase2_profiles()` and are deliberately separate from the frozen table
+`p0_profiles()` population.
 
 ## 7. Verification
 
@@ -139,7 +167,6 @@ It checks schema and geometry, both phases, scripted solvability, and sampled
 start/goal randomization. Run a logged demonstration with:
 
 ```bash
-python examples/run_scripted_table.py --config chair --phase 1 --profile fast_eager
 python examples/run_scripted_table.py --config chair --phase 2 --profile slow_methodical
 ```
 

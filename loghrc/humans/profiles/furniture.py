@@ -5,6 +5,87 @@ from loghrc.humans.profiles.library import HELD_OUT_PRESETS, PRESETS
 from loghrc.humans.scripted import HumanProfile
 
 
+def chair_phase2_profiles(config, held_out: bool = False) -> dict[str, HumanProfile]:
+    """Chair-only Phase 2 population with strict task preferences.
+
+    Training crosses four preference scopes with proactive/waiting execution
+    styles. Held-out profiles test shifted dynamics, an unseen diagonal scope,
+    and an unscoped flexible human. The chair study intentionally has no
+    Phase 1 population.
+    """
+
+    if config.name != "chair":
+        raise ValueError("chair Phase 2 profiles require the chair task")
+
+    scopes = {
+        "left_side": (
+            "leg_front_left", "leg_rear_left",
+            "back_upright_left", "back_bracket_left",
+        ),
+        "right_side": (
+            "leg_front_right", "leg_rear_right",
+            "back_upright_right", "back_bracket_right",
+        ),
+        "base": (
+            "leg_front_left", "leg_front_right",
+            "leg_rear_left", "leg_rear_right",
+        ),
+        "backrest": (
+            "back_upright_left", "back_bracket_left",
+            "back_upright_right", "back_bracket_right", "backrest",
+        ),
+    }
+    known_groups = {group.name for group in config.groups}
+    declared_groups = {name for scope in scopes.values() for name in scope}
+    if not declared_groups <= known_groups:
+        missing = sorted(declared_groups - known_groups)
+        raise ValueError(f"chair profile groups missing from task: {missing}")
+
+    if held_out:
+        profiles = []
+        for preference, scope in scopes.items():
+            profiles.append(HumanProfile(
+                f"slow_hesitant_{preference}", speed=1.5,
+                group_order=scope, proactivity=0.5, pause_prob=0.15,
+                pause_ticks=4, error_prob=0.03, group_scope=scope,
+                family="slow_hesitant_preference",
+            ))
+        diagonal_scopes = {
+            "diagonal_a": ("leg_front_left", "leg_rear_right"),
+            "diagonal_b": ("leg_front_right", "leg_rear_left"),
+        }
+        for preference, scope in diagonal_scopes.items():
+            profiles.append(HumanProfile(
+                preference, speed=1.0, group_order=scope,
+                proactivity=0.9, pause_prob=0.05, pause_ticks=3,
+                error_prob=0.02, group_scope=scope,
+                family="unseen_diagonal_preference",
+            ))
+        profiles.append(HumanProfile(
+            "flexible", speed=1.0, group_order="random", proactivity=0.8,
+            pause_prob=0.08, pause_ticks=2, error_prob=0.02,
+            group_scope=None, family="flexible",
+        ))
+    else:
+        profiles = []
+        for preference, scope in scopes.items():
+            profiles.extend((
+                HumanProfile(
+                    f"proactive_{preference}", speed=1.0,
+                    group_order=scope, proactivity=0.95, pause_prob=0.02,
+                    pause_ticks=2, error_prob=0.02, group_scope=scope,
+                    family="proactive_preference",
+                ),
+                HumanProfile(
+                    f"wait_{preference}", speed=1.0,
+                    group_order=scope, proactivity=0.9, pause_prob=0.05,
+                    pause_ticks=3, error_prob=0.02, group_scope=scope,
+                    wait_for_robot=True, family="wait_preference",
+                ),
+            ))
+    return {profile.name: profile for profile in profiles}
+
+
 def p0_profiles(config, phase: int, held_out: bool = False) -> dict[str, HumanProfile]:
     """Frozen P0 populations used by the training protocol.
 

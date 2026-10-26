@@ -8,9 +8,13 @@ from loghrc.core.env import LogHrcEnv
 from loghrc.core import physics
 from loghrc.constraints.graph import DefaultTaskGraph
 from loghrc.humans.scripted import HumanProfile, ScriptedPolicy
-from loghrc.humans.profiles.furniture import journal_profiles, p0_profiles
+from loghrc.humans.profiles.furniture import (
+    chair_phase2_profiles,
+    journal_profiles,
+    p0_profiles,
+)
 from loghrc.humans.pools import sample_profile
-from loghrc.tasks import two_leg_table_config, full_table_config
+from loghrc.tasks import chair_config, two_leg_table_config, full_table_config
 from loghrc.tasks.furniture.table import journal_furniture_config
 
 
@@ -197,6 +201,113 @@ def test_p0_flexible_profile_marks_preference_metrics_not_applicable():
         'robot_intrusion_rate', 'robot_complement_share',
     ):
         assert metrics[key] is None
+
+
+def test_chair_phase2_training_profiles_cross_preferences_and_styles():
+    config = chair_config()
+    profiles = chair_phase2_profiles(config)
+    expected_scopes = {
+        'left_side': (
+            'leg_front_left', 'leg_rear_left',
+            'back_upright_left', 'back_bracket_left',
+        ),
+        'right_side': (
+            'leg_front_right', 'leg_rear_right',
+            'back_upright_right', 'back_bracket_right',
+        ),
+        'base': (
+            'leg_front_left', 'leg_front_right',
+            'leg_rear_left', 'leg_rear_right',
+        ),
+        'backrest': (
+            'back_upright_left', 'back_bracket_left',
+            'back_upright_right', 'back_bracket_right', 'backrest',
+        ),
+    }
+    assert set(profiles) == {
+        f'{style}_{preference}'
+        for preference in expected_scopes
+        for style in ('proactive', 'wait')
+    }
+    for preference, scope in expected_scopes.items():
+        assert profiles[f'proactive_{preference}'].group_scope == scope
+        assert profiles[f'wait_{preference}'].group_scope == scope
+
+    operations = {
+        preference: sum(
+            len(group.part_ids) + len(group.joint_ids)
+            for group in config.groups if group.name in scope
+        )
+        for preference, scope in expected_scopes.items()
+    }
+    assert operations == {
+        'left_side': 18, 'right_side': 18,
+        'base': 24, 'backrest': 14,
+    }
+
+
+def test_chair_phase2_heldout_profiles_cover_shift_composition_and_flexibility():
+    profiles = chair_phase2_profiles(chair_config(), held_out=True)
+    assert set(profiles) == {
+        'slow_hesitant_left_side', 'slow_hesitant_right_side',
+        'slow_hesitant_base', 'slow_hesitant_backrest',
+        'diagonal_a', 'diagonal_b', 'flexible',
+    }
+    assert profiles['diagonal_a'].group_scope == (
+        'leg_front_left', 'leg_rear_right',
+    )
+    assert profiles['diagonal_b'].group_scope == (
+        'leg_front_right', 'leg_rear_left',
+    )
+    assert profiles['flexible'].group_scope is None
+
+
+def test_chair_phase2_profiles_reject_other_tasks():
+    with pytest.raises(ValueError, match='require the chair task'):
+        chair_phase2_profiles(full_table_config())
+
+
+@pytest.mark.parametrize('held_out', [False, True])
+def test_reference_policy_completes_chair_phase2_profiles(held_out):
+    config = journal_furniture_config(chair_config())
+    pool = chair_phase2_profiles(config, held_out=held_out)
+    for name, profile in pool.items():
+        env = LogHrcEnv(
+            config=config, phase=2, profile_pool=pool,
+            human_profile=name, graph=DefaultTaskGraph(False),
+        )
+        env.reset(seed=7)
+        robot = ScriptedPolicy(
+            HumanProfile('reference', proactivity=1, pause_prob=0, error_prob=0),
+            ROBOT,
+        )
+        robot.reset(env.config, env.np_random)
+        retreat = False
+        while True:
+            if retreat:
+                verb, arg, reason = 'move_home', None, 'act'
+            else:
+                verb, arg, reason = robot.decide(env, env.np_random)
+            action = env.action_table.index((verb, arg)) if reason == 'act' else 0
+            _, _, term, trunc, info = env.step(action)
+            retreat = verb in ('place_target', 'attach') and info['valid']
+            if term or trunc:
+                assert term, (name, info['progress'])
+                break
+
+        if profile.group_scope is not None:
+            allowed = {
+                operation
+                for group in config.groups if group.name in profile.group_scope
+                for operation in (*group.part_ids, *group.joint_ids)
+            }
+            completed = [
+                event for event in env.events
+                if event['type'] == 'action_end'
+                and event['agent'] == HUMAN and event['ok']
+                and event['verb'] in ('place_target', 'attach')
+            ]
+            assert all(event['arg'] in allowed for event in completed)
 
 
 @pytest.mark.parametrize('phase', [1,2])

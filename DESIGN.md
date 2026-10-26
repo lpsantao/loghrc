@@ -83,8 +83,9 @@ loghrc/
 - **Phase C: profile axis for assembly-location preference** (pre-build vs
   in-place) + scripted policies that can choose either path; human policy
   graph-optional.
-- **Phase D:** chair C0 config and docs completed 2026-10-25; chair-specific
-  profiles, frozen training protocol, and reference-demo regeneration remain.
+- **Phase D:** chair C0 config, docs, and Phase-2 profiles completed 2026-10-25;
+  training-repository integration, frozen run protocol, and reference-demo
+  regeneration remain.
 
 ---
 
