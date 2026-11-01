@@ -8,10 +8,11 @@ import argparse
 from dataclasses import replace
 
 from loghrc.tasks import chair_config, full_table_config, two_leg_table_config
-from loghrc.configs import ROBOT, RandomizationConfig
-from loghrc.env import LogHrcEnv
-from loghrc.episode_log import EpisodeRecorder
-from loghrc.human import RIGID_ROBOT_PROFILE, PRESETS, HELD_OUT_PRESETS, ScriptedPolicy
+from loghrc.core.config import ROBOT, RandomizationConfig
+from loghrc.core.env import LogHrcEnv
+from loghrc.core.episode_log import EpisodeRecorder
+from loghrc.humans.profiles.library import HELD_OUT_PRESETS, PRESETS, RIGID_ROBOT_PROFILE
+from loghrc.humans.scripted import ScriptedPolicy
 
 
 def main() -> None:
