@@ -4,35 +4,43 @@
 Gymnasium-based simulator for task-level HRC assembly with reinforcement
 learning.
 
-- **Durative tick engine**: robot and human act asynchronously; actions have
-  durations; idle time, blocked attempts, conflicts and proximity violations are
-  first-class, measurable events (Hoffman-style fluency metrics).
-- **Labelled voxel-grid observations** (LOG): one binary channel per semantic
-  label (part classes, targets, robot gripper, human). Every task uses the same
-  channel convention, while its channel count and grid dimensions are derived
-  from that task.
-- **Task-graph action masking**: the env is physically permissive; procedural
-  validity (precedence, allocation) surfaces through `action_masks()` for
-  MaskablePPO-style training. `constraint_mode="mask" | "penalty" | "none"`
-  switches between masking invalid actions, exposing and penalizing invalid
-  no-ops, and exposing invalid no-ops without a penalty. Task validity is the
-  same in all three arms; `graph=None` removes graph semantics, and
-  `phase=2, graph=None` gives physics-only validity.
-- **Pluggable everything**:
-  - *Tasks* are dataclass configs registered via `loghrc.tasks.register_task`
-    — no engine changes to add a task.
-  - *Human models* implement the `ScriptedPolicy` interface (`reset`, `decide`,
-    `on_task_completed`); parameterized stochastic profiles included.
-  - *Task-graph semantics* are a class (`DefaultTaskGraph`, AND-precedence);
-    subclass and pass via `TaskConfig.graph_factory` for e.g. OR-branching.
-- **Bulletproof configs**: a three-layer validator (geometry, graph,
-  scripted-solver dry run), run at env construction and via
-  `python -m loghrc.validate`. Passing means solver-verified for the tested
-  phases, seeds, profiles, and sampled layouts; it is not a mathematical proof.
-- **Layout randomization**: per-episode randomized part starts and/or goal
-  position (independent switches, seeded, every sampled layout re-validated).
-- **Every episode replayable**: compact event logs, deterministic replay,
-  offline interactive 3D viewer (`loghrc/viz/viewer/viewer.html`), gif/mp4 export.
+Robot and human act asynchronously on a **durative tick engine**: actions take
+time, and idle ticks, blocked attempts, conflicts and proximity violations are
+logged as first-class events rather than inferred after the fact (Hoffman-style
+fluency metrics).
+
+Observations are **labelled voxel grids** (LOG): one binary channel per
+semantic label — part classes, targets, robot gripper, human. Every task
+shares the same channel convention; channel count and grid size are derived
+from that task's own configuration.
+
+The env itself is physically permissive — procedural validity (precedence,
+allocation) lives in a separate **task-graph action-masking** layer, exposed
+through `action_masks()` for MaskablePPO-style training.
+`constraint_mode="mask" | "penalty" | "none"` switches between masking
+invalid actions, exposing and penalizing invalid no-ops, and exposing them
+unpenalized. Task validity is identical across all three arms; `graph=None`
+removes graph semantics, and `phase=2, graph=None` gives physics-only
+validity.
+
+Tasks, human models and task-graph semantics are all pluggable. Tasks are
+dataclass configs registered via `loghrc.tasks.register_task`, with no engine
+changes needed to add one. Human models implement the `ScriptedPolicy`
+interface (`reset`, `decide`, `on_task_completed`); parameterized stochastic
+profiles ship with the package. Task-graph semantics are a class
+(`DefaultTaskGraph` does AND-precedence by default) — subclass it and pass it
+via `TaskConfig.graph_factory` for other semantics, e.g. OR-branching.
+
+Every config runs through a three-layer validator (geometry, graph,
+scripted-solver dry run) at construction time and via
+`python -m loghrc.validate`. A pass means the config is solver-verified for
+the tested phases, seeds, profiles and sampled layouts — not a mathematical
+proof.
+
+Layouts can be randomized per episode (independent start/goal switches,
+seeded, every sampled layout re-validated), and every episode is replayable
+from its compact event log: deterministic replay, an offline interactive 3D
+viewer (`loghrc/viz/viewer/viewer.html`), and gif/mp4 export.
 
 ## Install
 
