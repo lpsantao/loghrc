@@ -149,7 +149,7 @@ class ScriptedPolicy(HumanModel):
                 self.engaged = False  # patience exhausted (CASE low-patience profiles)
             # Retreat while blocked instead of resting at the last work point:
             # a dependency may later let the other agent place a part around
-            # that stationary hand (DESIGN.md §3: hands stay outside parts).
+            # that stationary hand (hands stay outside placed parts).
             if not self._at_home(env):
                 return "move_home", None, "act"
             if self._fully_done(env):

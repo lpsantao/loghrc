@@ -1,10 +1,10 @@
 """Durative tick-based Gymnasium environment for labelled-voxel HRC assembly.
 
-DESIGN.md is the contract. One ``step()`` = one robot decision: the chosen
-action starts immediately, then the world advances tick-by-tick (human acting
-at its own decision points) until the robot is free again or the episode ends.
-The env is physically permissive; procedural (task-graph) validity surfaces
-through ``action_masks()``.
+One ``step()`` = one robot decision: the chosen action starts immediately,
+then the world advances tick-by-tick (human acting at its own decision
+points) until the robot is free again or the episode ends. The env is
+physically permissive; procedural (task-graph) validity surfaces through
+``action_masks()``.
 """
 
 from __future__ import annotations
@@ -196,7 +196,7 @@ class LogHrcEnv(gym.Env):
         self.show_targets = show_targets
         self.render_mode = render_mode
 
-        # verb x part action table, generated from config (DESIGN.md §2.3)
+        # verb x part action table, generated from config
         self._actions: list[tuple[str, int | None]] = [("move_home", None), ("wait", None)]
         for p in self.config.parts:
             self._actions += [("pick", p.id), ("place_target", p.id), ("place_staging", p.id)]
@@ -569,7 +569,7 @@ class LogHrcEnv(gym.Env):
                to: tuple[float, float, float]) -> list[tuple[float, float, float]]:
         """Over-the-top hand routing: rise to the travel plane above the tallest
         structure, traverse horizontally, descend to the destination. Keeps
-        hands out of assembled geometry (DESIGN.md §3)."""
+        hands out of assembled geometry."""
 
         if frm == to:
             return [frm]
@@ -724,7 +724,7 @@ class LogHrcEnv(gym.Env):
         }
 
     # ------------------------------------------------------------------
-    # Mask (task graph + allocation; DESIGN.md §2.4)
+    # Mask (task graph + allocation)
     # ------------------------------------------------------------------
     def action_masks(self) -> np.ndarray:
         """Policy-facing action mask for the selected constraint arm.
@@ -741,7 +741,7 @@ class LogHrcEnv(gym.Env):
         return np.ones(len(self._actions), dtype=bool)
 
     # ------------------------------------------------------------------
-    # Observation (labelled voxel grid, DESIGN.md §2.10)
+    # Observation (labelled voxel grid)
     # ------------------------------------------------------------------
     def _observation(self) -> np.ndarray | dict[str, np.ndarray]:
         voxels = build_observation(self, self.layout)
@@ -758,7 +758,7 @@ class LogHrcEnv(gym.Env):
                 int(np.clip(round(pos[2]), 0, gz - size[2])))
 
     # ------------------------------------------------------------------
-    # Reward (DESIGN.md §2.5)
+    # Reward
     # ------------------------------------------------------------------
     def _compute_reward(self, robot_action_valid: bool, terminated: bool) -> float:
         context = RewardContext(

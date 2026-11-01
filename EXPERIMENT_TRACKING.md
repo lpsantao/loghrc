@@ -96,8 +96,8 @@ Training code should add its own SB3, sb3-contrib, Torch, CUDA, model architectu
 optimizer, and hyperparameter manifest. Those are intentionally outside this
 simulator package.
 
-Final thesis runs should use a clean, tagged simulator commit. A dirty flag is
-recorded rather than forbidden so exploratory work remains convenient.
+Final reported runs should use a clean, tagged simulator commit. A dirty flag
+is recorded rather than forbidden so exploratory work remains convenient.
 
 ## 4. Run directory layout
 
@@ -403,7 +403,7 @@ Both versions are logged; neither replaces the raw primary outcomes.
 These scores are convenient summaries, not validated psychological constructs.
 Report success, time, idle, conflicts/blocked attempts, and proximity violations
 separately as primary outcomes. Freeze formulas before final runs and include a
-sensitivity analysis if the composite score supports a thesis claim.
+sensitivity analysis if the composite score supports a reported claim.
 
 ## 13. Minimum final-run checklist
 

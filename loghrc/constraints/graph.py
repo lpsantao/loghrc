@@ -1,4 +1,4 @@
-"""Pluggable task-graph semantics (the thesis constraint layer).
+"""Pluggable task-graph semantics.
 
 The free core executes any physically possible action; a task graph only
 shapes the ACTION MASK (and scripted agents' choices). ``DefaultTaskGraph``

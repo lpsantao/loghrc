@@ -1,8 +1,9 @@
-"""Fluency metrics and aggregation (RQ3/RQ4, DESIGN.md §2.5, tracker §4).
+"""Fluency metrics and aggregation.
 
 Per-episode counters are produced by the env (``metrics_summary``) and stored
 in every episode log footer and in each run's ``index.csv``. This module adds
-the derived scores and run-level aggregation used in Ch.7.
+the derived scores and run-level aggregation reported from experiment runs.
+See EXPERIMENT_TRACKING.md for the full metric definitions.
 """
 
 from __future__ import annotations

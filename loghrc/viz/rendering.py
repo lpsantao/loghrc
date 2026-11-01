@@ -1,4 +1,4 @@
-"""Matplotlib voxel rendering + headless episode-to-video exporter (DESIGN.md §7).
+"""Matplotlib voxel rendering + headless episode-to-video exporter.
 
 Usage:
     python -m loghrc.viz.rendering runs/demo/episodes/ep_000000.jsonl.gz \

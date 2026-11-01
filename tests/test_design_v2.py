@@ -163,7 +163,7 @@ def test_reward_precedence_env_override_beats_task():
 
 def test_task_owned_rewards():
     assert two_block_config().reward.completion == 30.0        # CASE constants
-    assert full_table_config().reward.shaping is True          # thesis composite
+    assert full_table_config().reward.shaping is True          # composite furniture reward
 
 
 @dataclass(frozen=True)

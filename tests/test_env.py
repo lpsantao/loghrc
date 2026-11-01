@@ -1,4 +1,4 @@
-"""Test suite for the furniture assembly environment (DESIGN.md §9 step 7)."""
+"""Test suite for the furniture assembly environment."""
 
 from __future__ import annotations
 
@@ -326,7 +326,7 @@ def test_metrics_summary_keys():
 @pytest.mark.parametrize("seed", range(2))
 def test_hands_never_inside_placed_parts(tmp_path, task_name, seed):
     """Regression: agents' hands must never enter voxels occupied by placed
-    parts (over-the-top routing, DESIGN.md §3) — parametrized over every
+    parts (over-the-top routing) — parametrized over every
     registered task (not a hardcoded furniture-only list), so a
     task-specific geometric coincidence (e.g. two_block: yellow's target
     sits exactly where the idle robot rests after finishing green, its only

@@ -1,4 +1,4 @@
-"""Episode event logging: every episode, always (DESIGN.md §6).
+"""Episode event logging: every episode, always.
 
 One gzipped JSONL file per episode (header line, event lines, footer line)
 plus, per ``RunLogger`` instance, an ``index_<uuid>.csv`` shard for

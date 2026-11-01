@@ -111,7 +111,7 @@ class RewardConfig:
 
     @staticmethod
     def hrc_composite() -> "RewardConfig":
-        """Shaping + fluency + step penalty — the thesis furniture reward."""
+        """Shaping + fluency + step penalty — the composite furniture reward."""
 
         return RewardConfig(shaping=True, fluency=True, step_penalty=True)
 

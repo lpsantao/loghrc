@@ -1,4 +1,4 @@
-"""Deterministic episode replay from event logs alone (DESIGN.md §6).
+"""Deterministic episode replay from event logs alone.
 
 No grids are stored: the full labelled-grid state at every tick is
 reconstructed from the header (geometry) + events (state deltas).
